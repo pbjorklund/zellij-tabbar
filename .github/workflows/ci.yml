@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  host:
+    name: Host tests and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --workspace --lib
+      - run: cargo clippy --locked --workspace --lib -- -D warnings
+      - run: cargo clippy --locked --bin zellij-tabbar -- -D warnings
+
+  wasm:
+    name: wasm32-wasip1 release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-wasip1
+      - run: cargo build --locked --release --target wasm32-wasip1
+      - name: Stage release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          artifact=target/wasm32-wasip1/release/zellij-tabbar.wasm
+          if [[ ! -f "$artifact" ]]; then
+            artifact=target/wasm32-wasip1/release/zellij_tabbar.wasm
+          fi
+          install -m 0644 "$artifact" dist/zellij-tabbar.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zellij-tabbar-wasm32-wasip1
+          path: dist/zellij-tabbar.wasm
+          if-no-files-found: error
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [fmt, host, wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zellij-tabbar-wasm32-wasip1
+          path: dist
+      - name: Create checksum
+        working-directory: dist
+        run: sha256sum zellij-tabbar.wasm > SHA256SUMS
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/zellij-tabbar.wasm
+            dist/SHA256SUMS

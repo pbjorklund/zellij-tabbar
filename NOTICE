@@ -1,0 +1,8 @@
+zellij-tabbar
+
+This project is adapted from zellij-vertical-tabs by Alex Lau:
+https://github.com/cfal/zellij-vertical-tabs
+
+Source baseline: commit 9b500a48427eed90654e5a226eae84908678ca92.
+The upstream source is MIT licensed. Its copyright notice and license are
+preserved in LICENSE.

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+vendor/
+__pycache__/
+*.pyc
+
+# Build outputs
+dist/
+build/
+target/
+*.o
+*.so
+
+# Environment
+.env
+.env.local
+
+# Workflow tools
+.af/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

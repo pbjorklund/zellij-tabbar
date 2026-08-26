@@ -1,0 +1,18 @@
+[package]
+name = "zellij-tabbar"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A configurable vertical tab bar plugin for Zellij"
+license = "MIT"
+repository = "https://github.com/pbjorklund/zellij-tabbar"
+keywords = ["zellij", "terminal", "wasm", "tabs"]
+categories = ["command-line-utilities", "wasm"]
+
+[workspace]
+members = ["activity"]
+
+[dependencies]
+zellij-tile = "=0.44.3"
+unicode-width = "0.2"
+activity = { path = "activity" }

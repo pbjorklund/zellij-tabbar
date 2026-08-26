@@ -1,0 +1,21 @@
+// Left sidebar with the colors and spacing used by the Omarchy layout.
+layout {
+    pane split_direction="vertical" {
+        pane size=32 borderless=true {
+            plugin location="file:~/.config/zellij/plugins/zellij-tabbar.wasm" {
+                format "{index}:{name}"
+                format_active "#[bg=236,fg=252,bold,fill]{index}:{name}*"
+                max_name_length 26
+                border "#[fg=dim]│"
+                overflow_above "  ^ +{count}"
+                overflow_below "  v +{count}"
+            }
+        }
+
+        pane focus=true
+    }
+
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}
