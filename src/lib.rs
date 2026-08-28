@@ -125,6 +125,27 @@ pub fn scroll_target(active_tab: usize, tab_count: usize, forward: bool) -> Opti
     })
 }
 
+pub fn select_active_tab(
+    tabs: &[(usize, bool)],
+    previous_active_id: Option<usize>,
+    previous_active_index: usize,
+) -> Option<(usize, usize)> {
+    if let Some((index, (tab_id, _))) = tabs.iter().enumerate().find(|(_, (_, active))| *active) {
+        return Some((index, *tab_id));
+    }
+
+    if let Some(previous_active_id) = previous_active_id
+        && let Some(index) = tabs
+            .iter()
+            .position(|(tab_id, _)| *tab_id == previous_active_id)
+    {
+        return Some((index, previous_active_id));
+    }
+
+    let index = previous_active_index.min(tabs.len().checked_sub(1)?);
+    Some((index, tabs[index].0))
+}
+
 pub fn truncate_string(value: &str, max_width: usize) -> String {
     if value.width() <= max_width {
         return value.to_string();
@@ -210,5 +231,28 @@ mod tests {
         assert_eq!(truncate_string("räksmörgås", 7), "räks...");
         assert_eq!(truncate_string("界面", 3), "...");
         assert_eq!(truncate_string("界面界", 5), "界...");
+    }
+
+    #[test]
+    fn preserves_active_tab_identity_when_an_update_has_no_active_marker() {
+        let tabs = [(12, false), (13, false)];
+
+        assert_eq!(select_active_tab(&tabs, Some(13), 3), Some((1, 13)));
+        assert_eq!(select_active_tab(&tabs, Some(12), 1), Some((0, 12)));
+    }
+
+    #[test]
+    fn active_marker_overrides_the_previous_tab_identity() {
+        let tabs = [(12, false), (13, true)];
+
+        assert_eq!(select_active_tab(&tabs, Some(12), 0), Some((1, 13)));
+    }
+
+    #[test]
+    fn clamps_the_previous_index_when_the_active_tab_was_closed() {
+        let tabs = [(12, false), (14, false)];
+
+        assert_eq!(select_active_tab(&tabs, Some(13), 3), Some((1, 14)));
+        assert_eq!(select_active_tab(&[], Some(13), 3), None);
     }
 }

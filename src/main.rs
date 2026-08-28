@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
-use zellij_tabbar::{calculate_visible_range, scroll_target, truncate_string};
+use zellij_tabbar::{calculate_visible_range, scroll_target, select_active_tab, truncate_string};
 use zellij_tile::prelude::*;
 
 // ========== COLOR SYSTEM ==========
@@ -464,6 +464,7 @@ impl Default for StyleConfig {
 struct State {
     tabs: Vec<TabInfo>,
     active_tab_idx: usize,
+    active_tab_id: Option<usize>,
     mode_info: ModeInfo,
     pane_manifest: PaneManifest,
     style: StyleConfig,
@@ -572,12 +573,19 @@ impl ZellijPlugin for State {
                 self.mode_info = mode_info;
             }
             Event::TabUpdate(tabs) => {
-                let active_tab_index = tabs.iter().position(|t| t.active).unwrap_or(0);
-                let active_tab_idx = active_tab_index + 1;
+                let tab_states: Vec<_> = tabs.iter().map(|tab| (tab.tab_id, tab.active)).collect();
+                let active_tab = select_active_tab(
+                    &tab_states,
+                    self.active_tab_id,
+                    self.active_tab_idx.saturating_sub(1),
+                );
+                let active_tab_idx = active_tab.map_or(0, |(index, _)| index + 1);
+                let active_tab_id = active_tab.map(|(_, tab_id)| tab_id);
                 if self.active_tab_idx != active_tab_idx || self.tabs != tabs {
                     should_render = true;
                 }
                 self.active_tab_idx = active_tab_idx;
+                self.active_tab_id = active_tab_id;
                 self.tabs = tabs;
             }
             Event::PaneUpdate(pane_manifest) => {
