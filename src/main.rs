@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
-use zellij_tabbar::{calculate_visible_range, scroll_target, select_active_tab, truncate_string};
+use zellij_tabbar::{
+    calculate_visible_range, own_tab_is_active, scroll_target, select_active_tab, truncate_string,
+};
 use zellij_tile::prelude::*;
 
 // ========== COLOR SYSTEM ==========
@@ -473,6 +475,8 @@ struct State {
     pending_events: Vec<Event>,
     activity: BTreeMap<String, activity::Activity>,
     own_session: String,
+    own_plugin_id: Option<u32>,
+    own_tab_position: Option<usize>,
     row_targets: Vec<Option<usize>>,
 }
 
@@ -526,11 +530,10 @@ impl ZellijPlugin for State {
             self.style.activity_format = v.clone();
         }
 
-        request_permission(&[
-            PermissionType::ReadApplicationState,
-            PermissionType::ChangeApplicationState,
-        ]);
+        self.own_plugin_id = Some(get_plugin_ids().plugin_id);
 
+        // Subscribe before requesting permissions so a cached permission result
+        // cannot arrive before this plugin is listening for it.
         subscribe(&[
             EventType::TabUpdate,
             EventType::PaneUpdate,
@@ -538,6 +541,11 @@ impl ZellijPlugin for State {
             EventType::Mouse,
             EventType::PermissionRequestResult,
             EventType::SessionUpdate,
+        ]);
+
+        request_permission(&[
+            PermissionType::ReadApplicationState,
+            PermissionType::ChangeApplicationState,
         ]);
     }
 
@@ -589,8 +597,11 @@ impl ZellijPlugin for State {
                 self.tabs = tabs;
             }
             Event::PaneUpdate(pane_manifest) => {
+                if let Some(own_tab_position) = self.find_own_tab_position(&pane_manifest) {
+                    self.own_tab_position = Some(own_tab_position);
+                }
+                should_render = self.pane_manifest != pane_manifest;
                 self.pane_manifest = pane_manifest;
-                should_render = true;
             }
             Event::Mouse(me) => match me {
                 Mouse::LeftClick(row, _col) => {
@@ -622,7 +633,7 @@ impl ZellijPlugin for State {
             }
             _ => {}
         }
-        should_render
+        should_render && self.own_tab_is_active()
     }
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
@@ -651,7 +662,7 @@ impl ZellijPlugin for State {
                     && let Some((zsession, name, act)) = activity::parse_activity(payload)
                 {
                     self.activity.insert(format!("{zsession}\u{1}{name}"), act);
-                    return true;
+                    return self.own_tab_is_active();
                 }
                 false
             }
@@ -670,6 +681,27 @@ impl ZellijPlugin for State {
 }
 
 impl State {
+    fn own_tab_is_active(&self) -> bool {
+        let tab_states: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.position, tab.active))
+            .collect();
+        own_tab_is_active(&tab_states, self.own_tab_position)
+    }
+
+    fn find_own_tab_position(&self, pane_manifest: &PaneManifest) -> Option<usize> {
+        pane_manifest
+            .panes
+            .iter()
+            .find_map(|(tab_position, panes)| {
+                panes
+                    .iter()
+                    .any(|pane| pane.is_plugin && Some(pane.id) == self.own_plugin_id)
+                    .then_some(*tab_position)
+            })
+    }
+
     fn get_focused_pane_title(&self, tab_position: usize) -> Option<String> {
         if let Some(panes) = self.pane_manifest.panes.get(&tab_position) {
             for pane in panes {

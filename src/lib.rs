@@ -146,6 +146,16 @@ pub fn select_active_tab(
     Some((index, tabs[index].0))
 }
 
+pub fn own_tab_is_active(tabs: &[(usize, bool)], own_tab_position: Option<usize>) -> bool {
+    let Some(own_tab_position) = own_tab_position else {
+        return true;
+    };
+
+    tabs.iter()
+        .find(|(position, _)| *position == own_tab_position)
+        .is_none_or(|(_, active)| *active)
+}
+
 pub fn truncate_string(value: &str, max_width: usize) -> String {
     if value.width() <= max_width {
         return value.to_string();
@@ -254,5 +264,21 @@ mod tests {
 
         assert_eq!(select_active_tab(&tabs, Some(13), 3), Some((1, 14)));
         assert_eq!(select_active_tab(&[], Some(13), 3), None);
+    }
+
+    #[test]
+    fn renders_only_the_tabbar_in_the_active_tab() {
+        let tabs = [(0, false), (1, true), (2, false)];
+
+        assert!(own_tab_is_active(&tabs, Some(1)));
+        assert!(!own_tab_is_active(&tabs, Some(0)));
+    }
+
+    #[test]
+    fn renders_while_the_tabbar_location_is_not_known() {
+        let tabs = [(0, true)];
+
+        assert!(own_tab_is_active(&tabs, None));
+        assert!(own_tab_is_active(&tabs, Some(1)));
     }
 }
