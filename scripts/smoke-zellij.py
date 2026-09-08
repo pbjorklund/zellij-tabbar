@@ -262,7 +262,7 @@ keybinds clear-defaults=true {
                 print(f"PASS {label}: " + ", ".join(expected), flush=True)
                 return
             text = "\n".join(lines).lower()
-            if "permission" in text and ("[y]" in text or "(y)" in text or "(y/n)" in text):
+            if "permission" in "".join(text.split()) and ("[y]" in text or "(y)" in text or "(y/n)" in text):
                 candidates = [pane for pane in self.panes() if pane.get("plugin_url") == self.plugin_url and pane.get("tab_name") == active]
                 if not candidates:
                     continue
