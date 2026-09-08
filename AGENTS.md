@@ -5,11 +5,15 @@
 ## Code map
 
 - `src/main.rs`: WASM plugin registration and the `ZellijHost` adapter. Native execution reports that the plugin must run inside Zellij.
-- `src/plugin.rs`: `Tabbar<H>` event state, configuration, format/color parsing, and frame rendering. All Zellij calls and frame output go through `Host`.
+- `src/plugin.rs`: `Tabbar<H>` state and callbacks. All Zellij calls and frame output go through `Host`.
+- `src/plugin/config.rs`: `StyleConfig` defaults and configuration compilation.
+- `src/plugin/formatting.rs`: format/color parsing, styled text, width clipping, and ANSI line composition.
+- `src/plugin/rendering.rs`: immutable `RenderContext` produces a frame and its click targets without host calls.
 - `src/plugin/event_tests.rs`: real callback sequences, recorded host effects, frame output, and rendered-row click targets.
 - `src/lib.rs`: pure helpers for visible ranges, navigation, active-tab identity, render gating, and Unicode display-width truncation. Unit tests are in the same file.
 - `benches/plugin.rs`: dependency-free rendering and permission-replay benchmarks.
 - `scripts/smoke-zellij.py`: isolated live PTY test for sidebar output and mouse navigation, using the built WASM.
+- `scripts/test_smoke_zellij.py`: exact-output and cleanup regression tests; no Zellij process required.
 - `activity/src/lib.rs`: JSON activity parsing and text rows for subagents and todos, with inline unit tests. This workspace crate has no Zellij dependency.
 - `examples/`: KDL layouts for the sidebar, swap layouts, and a fallback that uses Zellij's built-in horizontal tab bar.
 - `.github/workflows/ci.yml`: formatting, host tests, Clippy, WASI builds, and tagged releases.
@@ -30,6 +34,7 @@ Run the checks used by CI before handing off code changes:
 ```sh
 cargo fmt --check
 cargo test --locked --workspace --lib
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked --target wasm32-wasip1 --bin zellij-tabbar -- -D warnings
 cargo build --locked --release --target wasm32-wasip1
@@ -51,7 +56,8 @@ The plugin artifact is `target/wasm32-wasip1/release/zellij-tabbar.wasm`. It run
 - Subscribe before requesting permissions. Queue early events until permissions are granted, then replay them.
 - Keep diagnostics opt-in through `diagnostics "true"` and send them through `Host::log` to stderr, never frame output. Sample repeated events and log numeric state only, not titles, session names, commands, configuration values, or activity payloads.
 - Activity pipe payloads are parsed by `activity::parse_activity`. Entries are keyed by Zellij session and name; rendering looks them up using the current session and normalized focused-pane title, with a tab-name fallback. Preserve this matching when changing activity handling.
-- Subagents take precedence over todos. Done todos are hidden; todo output is capped at six items plus an overflow row. Activity rows must leave room for the remaining visible tabs and the below-overflow row.
+- Subagents take precedence over todos. Done todos are hidden; todo output is capped at six items plus an overflow row. Use `render_activity_limited` to build only rows that fit, leaving room for remaining visible tabs and the below-overflow row. Bound text construction by the column budget too.
+- Replace raw terminal control characters in row text with spaces. Only the formatter emits ANSI styles and the frame assembler emits newlines.
 - When adding or changing configuration, update `StyleConfig`, `Tabbar::load`, `README.md`, and relevant KDL examples together. Preserve existing keys and aliases unless the task explicitly changes compatibility.
 - Keep `Cargo.lock` tracked. Do not change the pinned Zellij API version or add dependencies without a task-specific reason.
 - Preserve upstream attribution in `LICENSE`, `NOTICE`, and source headers. Do not commit build outputs from `target/` or `dist/`.

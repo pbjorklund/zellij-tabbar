@@ -27,6 +27,21 @@ import unicodedata
 import uuid
 
 
+SIDEBAR_WIDTH = 38
+
+
+def sidebar_matches(lines, expected, absent=()):
+    """Require complete ASCII labels at row/col 0, space padding and a border."""
+    sidebar = [line[:SIDEBAR_WIDTH] for line in lines]
+    if len(sidebar) < len(expected):
+        return False
+    for row, label in zip(sidebar, expected):
+        text, border, remainder = row.partition("|")
+        if text.rstrip(" ") != label or not border or remainder.strip(" "):
+            return False
+    return not any(name in "\n".join(sidebar) for name in absent)
+
+
 class Screen:
     """Small VT viewport oracle, not a general terminal emulator."""
 
@@ -186,7 +201,7 @@ keybinds clear-defaults=true {
         self.layout.write_text(f'''layout {{
     default_tab_template {{
         pane split_direction="vertical" {{
-            pane size=38 borderless=true {{
+            pane size={SIDEBAR_WIDTH} borderless=true {{
                 plugin location={plugin_url} {{
                     format "{self.prefix}-I{{index}}:{{name}}"
                     format_active "{self.prefix}-A{{index}}:{{name}}"
@@ -208,10 +223,13 @@ keybinds clear-defaults=true {
         self.process = None
         self.granted_panes = set()
 
+    def _cli_result(self, *action):
+        return subprocess.run(self.base + list(action), env=self.env, cwd=self.root,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              timeout=self.timeout)
+
     def cli(self, *action, check=True):
-        result = subprocess.run(self.base + list(action), env=self.env, cwd=self.root,
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                timeout=self.timeout)
+        result = self._cli_result(*action)
         if check and result.returncode:
             raise RuntimeError(f"{action}: {result.stderr or result.stdout}")
         return result.stdout
@@ -256,9 +274,7 @@ keybinds clear-defaults=true {
         while time.monotonic() < deadline:
             self.pump()
             lines = self.screen.lines()
-            sidebar = [line[:38] for line in lines]
-            positions = [next((i for i, line in enumerate(sidebar) if marker in line), -1) for marker in expected]
-            if all(i >= 0 for i in positions) and positions == sorted(set(positions)) and not any(name in "\n".join(sidebar) for name in absent):
+            if sidebar_matches(lines, expected, absent):
                 print(f"PASS {label}: " + ", ".join(expected), flush=True)
                 return
             text = "\n".join(lines).lower()
@@ -283,24 +299,38 @@ keybinds clear-defaults=true {
         os.kill(self.process.pid, signal.SIGWINCH)
 
     def close(self):
-        if self.process is not None:
-            try:
-                self.cli("kill-session", self.session, check=False)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGTERM)
+        try:
+            if self.process is not None:
                 try:
-                    self.process.wait(timeout=3)
+                    self.cli("kill-session", self.session, check=False)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+                try:
+                    self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                    self.process.wait(timeout=3)
-        if self.master is not None:
-            os.close(self.master)
-        if self.process is not None and self.session in self.cli("list-sessions", "--short", "--no-formatting", check=False).splitlines():
-            raise RuntimeError(f"isolated session did not stop: {self.session}")
+                    os.killpg(self.process.pid, signal.SIGTERM)
+                    try:
+                        self.process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                        self.process.wait(timeout=3)
+        finally:
+            if self.master is not None:
+                os.close(self.master)
+                self.master = None
+        if self.process is not None:
+            result = self._cli_result("list-sessions", "--short", "--no-formatting")
+            # Zellij 0.45.0 reports an empty socket directory with this exact
+            # nonzero result, verified in isolated HOME/XDG/socket directories.
+            no_sessions = (result.returncode == 1 and result.stdout == ""
+                           and result.stderr.strip() == "No active zellij sessions found.")
+            if result.returncode != 0 and not no_sessions:
+                raise RuntimeError(
+                    f"could not verify isolated session cleanup: exit {result.returncode}; "
+                    f"stdout={result.stdout!r}; stderr={result.stderr!r}"
+                )
+            if self.session in result.stdout.splitlines():
+                raise RuntimeError(f"isolated session did not stop: {self.session}")
 
     def run(self):
         self.start()
@@ -351,13 +381,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="tabbar-smoke-", dir="/tmp") as directory:
         smoke = Smoke(binary, wasm, args.timeout, Path(directory))
         print(f"Isolated session: {smoke.session}", flush=True)
+        failed = False
         try:
             smoke.run()
         except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError) as error:
             print(f"FAIL: {error}\nLast viewport:\n" + "\n".join(smoke.screen.lines()), file=sys.stderr)
-            return 1
+            failed = True
         finally:
-            smoke.close()
+            try:
+                smoke.close()
+            except (RuntimeError, subprocess.TimeoutExpired, OSError, ValueError) as error:
+                print(f"FAIL cleanup: {error}", file=sys.stderr)
+                failed = True
+        if failed:
+            return 1
     print("PASS live PTY rendering and mouse clicks; overflow, Unicode and activity rows covered only by host tests")
     return 0
 

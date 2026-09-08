@@ -90,40 +90,41 @@ pub fn parse_activity(payload: &str) -> Option<(String, String, Activity)> {
     Some((zsession, name, Activity { subagents, todos }))
 }
 
-fn truncate(s: &str, cols: usize) -> String {
-    if s.chars().count() <= cols {
-        return s.to_string();
-    }
-    s.chars().take(cols).collect()
+fn render_row(parts: &[&str], cols: usize) -> String {
+    parts
+        .iter()
+        .flat_map(|part| part.chars())
+        .take(cols)
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
 }
 
 pub fn render_activity(a: &Activity, cols: usize) -> Vec<String> {
+    render_activity_limited(a, cols, usize::MAX)
+}
+
+pub fn render_activity_limited(a: &Activity, cols: usize, max_rows: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    if max_rows == 0 {
+        return out;
+    }
     if !a.subagents.is_empty() {
-        for s in &a.subagents {
-            let row = if s.title.is_empty() {
-                format!("  {} {}", s.icon, s.glyph)
-            } else {
-                format!("  {} {} {}", s.icon, s.glyph, s.title)
-            };
-            out.push(truncate(&row, cols));
+        for s in a.subagents.iter().take(max_rows) {
+            let separator = if s.title.is_empty() { "" } else { " " };
+            out.push(render_row(
+                &["  ", &s.icon, " ", &s.glyph, separator, &s.title],
+                cols,
+            ));
         }
         return out;
     }
-    let visible: Vec<&Todo> = a
-        .todos
-        .iter()
-        .filter(|t| t.status != TodoStatus::Done)
-        .collect();
+    let mut visible = a.todos.iter().filter(|t| t.status != TodoStatus::Done);
     let cap = 6usize;
-    for t in visible.iter().take(cap) {
-        out.push(truncate(
-            &format!("  {} {}", checkbox(t.status), t.text),
-            cols,
-        ));
+    for t in visible.by_ref().take(cap.min(max_rows)) {
+        out.push(render_row(&["  ", checkbox(t.status), " ", &t.text], cols));
     }
-    if visible.len() > cap {
-        out.push(truncate("  …", cols));
+    if max_rows > cap && visible.next().is_some() {
+        out.push(render_row(&["  …"], cols));
     }
     out
 }
@@ -131,6 +132,87 @@ pub fn render_activity(a: &Activity, cols: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_rows_replace_terminal_controls_with_spaces() {
+        let activity = Activity {
+            todos: vec![Todo {
+                status: TodoStatus::Pending,
+                text: "first\nsecond\rthird\ttab\x1b[31m".into(),
+            }],
+            ..Activity::default()
+        };
+        assert_eq!(
+            render_activity(&activity, 60),
+            ["  ☐ first second third tab [31m"]
+        );
+        let activity = Activity {
+            subagents: vec![SubRow {
+                icon: "\n".into(),
+                glyph: "\t".into(),
+                title: "a\rb".into(),
+            }],
+            ..Activity::default()
+        };
+        assert_eq!(render_activity(&activity, 60), ["      a b"]);
+    }
+
+    #[test]
+    fn limited_rows_preserve_todo_overflow_and_done_filtering() {
+        let activity = Activity {
+            todos: (0..9)
+                .map(|i| Todo {
+                    status: if i == 1 {
+                        TodoStatus::Done
+                    } else {
+                        TodoStatus::Pending
+                    },
+                    text: i.to_string(),
+                })
+                .collect(),
+            ..Activity::default()
+        };
+        let expected = ["  ☐ 0", "  ☐ 2", "  ☐ 3", "  ☐ 4", "  ☐ 5", "  ☐ 6", "  …"];
+        for rows in 0..10 {
+            assert_eq!(
+                render_activity_limited(&activity, 20, rows),
+                expected
+                    .iter()
+                    .take(rows)
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn limited_subagents_keep_priority_order_and_character_limit() {
+        let activity = Activity {
+            subagents: vec![
+                SubRow {
+                    icon: "A".into(),
+                    glyph: "B".into(),
+                    title: "界界".into(),
+                },
+                SubRow {
+                    icon: "C".into(),
+                    glyph: "D".into(),
+                    title: "".into(),
+                },
+            ],
+            todos: vec![Todo {
+                status: TodoStatus::Pending,
+                text: "hidden".into(),
+            }],
+        };
+        assert_eq!(render_activity_limited(&activity, 7, 1), ["  A B 界"]);
+        assert_eq!(render_activity_limited(&activity, 0, 2), ["", ""]);
+        assert!(render_activity_limited(&activity, 20, 0).is_empty());
+        assert_eq!(
+            render_activity_limited(&activity, 20, 10),
+            ["  A B 界界", "  C D"]
+        );
+    }
 
     #[test]
     fn parses_subagents_with_title() {

@@ -34,6 +34,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace --lib
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   wasm:

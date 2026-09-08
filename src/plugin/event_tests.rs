@@ -1,4 +1,6 @@
+use super::formatting::parse_styled_string;
 use super::*;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Default)]
 struct RecordingHost {
@@ -222,6 +224,27 @@ fn rendering_keeps_activity_click_targets_and_reserves_primary_rows() {
     );
     state.update(Event::Mouse(Mouse::LeftClick(2, 0)));
     assert_eq!(state.host.switches, [1]);
+}
+
+#[test]
+fn activity_controls_preserve_physical_rows_and_click_targets() {
+    for payload in [
+        r#"{"name":"work-10","todos":[{"text":"first\nsecond\rthird\ttab"}]}"#,
+        r#"{"name":"work-10","subagents":{"1":{"title":"first\nsecond\rthird\ttab"}}}"#,
+    ] {
+        let mut state = state();
+        state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+        state.pipe(message("activity", payload));
+        state.render(3, 60);
+        let frame = state.host.frames.last().unwrap();
+        assert_eq!(frame.lines().count(), 3, "{frame:?}");
+        assert!(!frame.contains(['\r', '\t']));
+        assert!(frame.contains("first second third tab"));
+        assert_eq!(state.row_targets, [Some(1), Some(1), None]);
+        state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
+        state.update(Event::Mouse(Mouse::LeftClick(2, 0)));
+        assert_eq!(state.host.switches, [1]);
+    }
 }
 
 #[test]

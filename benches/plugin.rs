@@ -53,6 +53,41 @@ fn render_sample() -> Duration {
     start.elapsed()
 }
 
+fn activity_sample() -> Duration {
+    activity_render_sample(1000, "background worker")
+}
+
+fn long_activity_sample() -> Duration {
+    activity_render_sample(1, &"x".repeat(1_000_000))
+}
+
+fn activity_render_sample(count: usize, title: &str) -> Duration {
+    let mut state = loaded();
+    state.update(Event::PermissionRequestResult(PermissionStatus::Granted));
+    state.update(Event::TabUpdate(vec![TabInfo {
+        tab_id: 10,
+        name: "work".into(),
+        active: true,
+        ..TabInfo::default()
+    }]));
+    let entries = (0..count)
+        .map(|i| format!(r#""{i}":{{"title":"{title}"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    state.pipe(PipeMessage::new(
+        PipeSource::Keybind,
+        "activity",
+        &Some(format!(r#"{{"name":"work","subagents":{{{entries}}}}}"#)),
+        &None,
+        false,
+    ));
+    let start = Instant::now();
+    for _ in 0..200 {
+        state.render(3, 32);
+    }
+    start.elapsed()
+}
+
 fn replay_sample() -> Duration {
     let mut state = loaded();
     for _ in 0..4_000 {
@@ -68,6 +103,14 @@ fn main() {
         (
             "render 2000 frames (32 tabs, 40x32)",
             render_sample as fn() -> Duration,
+        ),
+        (
+            "render 200 activity frames (1000 subagents, 3x32)",
+            activity_sample as fn() -> Duration,
+        ),
+        (
+            "render 200 activity frames (1MB title, 3x32)",
+            long_activity_sample as fn() -> Duration,
         ),
         (
             "replay 4000 queued events",
