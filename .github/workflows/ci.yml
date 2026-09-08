@@ -34,8 +34,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked --workspace --lib
-      - run: cargo clippy --locked --workspace --lib -- -D warnings
-      - run: cargo clippy --locked --bin zellij-tabbar -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   wasm:
     name: wasm32-wasip1 release build
@@ -45,9 +44,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-wasip1
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: wasm32-wasip1
+      - run: cargo clippy --locked --target wasm32-wasip1 --bin zellij-tabbar -- -D warnings
       - run: cargo build --locked --release --target wasm32-wasip1
       - name: Stage release artifact
         shell: bash

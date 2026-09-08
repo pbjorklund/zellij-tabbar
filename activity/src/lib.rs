@@ -216,7 +216,7 @@ mod tests {
         let todos: Vec<Todo> = (0..9)
             .map(|i| Todo {
                 status: TodoStatus::Pending,
-                text: format!("t{}", i),
+                text: format!("t{i}"),
             })
             .collect();
         let act = Activity {
@@ -254,7 +254,7 @@ mod tests {
             }],
         };
         for r in &render_activity(&act, 10) {
-            assert!(r.chars().count() <= 10, "row too wide: {:?}", r);
+            assert!(r.chars().count() <= 10, "row too wide: {r:?}");
         }
     }
 

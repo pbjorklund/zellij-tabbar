@@ -5,6 +5,7 @@ layout {
             plugin location="file:~/.config/zellij/plugins/zellij-tabbar.wasm" {
                 format "{index}:{name}"
                 format_active "#[bg=236,fg=252,bold,fill]{index}:{name}*"
+                diagnostics "false"
                 max_name_length 26
                 border "#[fg=dim]│"
                 overflow_above "  ^ +{count}"

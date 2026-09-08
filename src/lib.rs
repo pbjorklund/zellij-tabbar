@@ -1,6 +1,8 @@
 // Core behavior adapted from zellij-vertical-tabs by Alex Lau.
 // Upstream commit: 9b500a48427eed90654e5a226eae84908678ca92.
 
+pub mod plugin;
+
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
