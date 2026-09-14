@@ -19,6 +19,7 @@ pub(super) struct StyleConfig {
     pub(super) max_name_length: usize,
     pub(super) start_index: usize,
     pub(super) activity_format: String,
+    pub(super) parked_header: StyledText,
 }
 
 impl Default for StyleConfig {
@@ -36,6 +37,7 @@ impl Default for StyleConfig {
             border: StyledText::new(),
             start_index: 1,
             activity_format: "#[fg=dim]{activity}".to_string(),
+            parked_header: parse_styled_string("Parked"),
         }
     }
 }
@@ -86,13 +88,16 @@ impl StyleConfig {
         if let Some(v) = configuration.get("activity_format") {
             self.activity_format = v.clone();
         }
+        if let Some(v) = configuration.get("parked_header") {
+            self.parked_header = parse_styled_string(v);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::formatting::build_empty_line;
+    use crate::plugin::formatting::{build_empty_line, build_line};
 
     #[test]
     fn repeated_configuration_preserves_style_values_and_prefers_border_over_alias() {
@@ -102,10 +107,15 @@ mod tests {
             ("border_char".into(), "!".into()),
             ("padding_top".into(), "2".into()),
             ("start_index".into(), "0".into()),
+            ("parked_header".into(), "Shelf".into()),
         ]));
         style.apply(&BTreeMap::from([("padding_top".into(), "invalid".into())]));
 
         assert_eq!(build_empty_line(&style.border, 1), "|");
+        assert_eq!(
+            build_line(&style.parked_header, &style.border, 8, false),
+            "Shelf  |"
+        );
         assert_eq!(style.padding_top, 2);
         assert_eq!(style.start_index, 0);
     }

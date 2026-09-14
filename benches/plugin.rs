@@ -15,6 +15,8 @@ impl Host for BenchHost {
     fn request_permissions(&mut self, _: &[PermissionType]) {}
     fn set_selectable(&mut self, _: bool) {}
     fn switch_tab(&mut self, _: u32) {}
+    fn park_tab(&mut self, _: Option<u64>) {}
+    fn resume_tab(&mut self, _: u64) {}
     fn render(&mut self, frame: &str) {
         black_box(frame);
     }
@@ -41,6 +43,7 @@ fn render_sample() -> Duration {
                 tab_id: i + 10,
                 position: i,
                 active: i == 15,
+                is_parked: i >= 24,
                 name: format!("worktree-{i}-界-long-title"),
                 ..TabInfo::default()
             })

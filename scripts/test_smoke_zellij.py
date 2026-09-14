@@ -74,6 +74,52 @@ class SidebarMatcherTests(unittest.TestCase):
         self.assertFalse(smoke_zellij.sidebar_matches(lines, EXPECTED, absent=("stale-name",)))
 
 
+class BottomSidebarMatcherTests(unittest.TestCase):
+    def test_accepts_rows_anchored_to_viewport_bottom(self):
+        lines = [
+            "SBtest-A1:alpha                     |",
+            "                                    |",
+            "Parked                              |",
+            "SBtest-I2:beta                      | adjacent pane",
+        ]
+        self.assertTrue(
+            smoke_zellij.sidebar_bottom_matches(
+                lines, ["Parked", "SBtest-I2:beta"], absent=("adjacent pane",)
+            )
+        )
+
+    def test_rejects_matching_rows_above_viewport_bottom(self):
+        lines = [
+            "Parked                              |",
+            "SBtest-I2:beta                      |",
+            "                                    |",
+        ]
+        self.assertFalse(
+            smoke_zellij.sidebar_bottom_matches(lines, ["Parked", "SBtest-I2:beta"])
+        )
+
+    def test_rejects_malformed_bottom_rows(self):
+        healthy = [
+            "                                    |",
+            "Parked                              |",
+            "SBtest-I2:beta                      |",
+        ]
+        malformed = {
+            "wrong order": [healthy[0], healthy[2], healthy[1]],
+            "shifted columns": [healthy[0], " " + healthy[1], " " + healthy[2]],
+            "missing border": [healthy[0], healthy[1].replace("|", " "), healthy[2]],
+            "non-space padding": [healthy[0], "Parked !                            |", healthy[2]],
+            "short viewport": [healthy[2]],
+        }
+        for label, lines in malformed.items():
+            with self.subTest(label=label):
+                self.assertFalse(
+                    smoke_zellij.sidebar_bottom_matches(
+                        lines, ["Parked", "SBtest-I2:beta"]
+                    )
+                )
+
+
 class ExpectTests(unittest.TestCase):
     def harness(self, lines):
         harness = smoke_zellij.Smoke.__new__(smoke_zellij.Smoke)
@@ -209,13 +255,16 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             wasm = Path(directory) / "test.wasm"
             wasm.write_bytes(b"fixture")
-            args = mock.Mock(wasm=wasm, timeout=1)
+            fork = Path(directory) / "zellij-fork"
+            fork.write_bytes(b"binary")
+            fork.chmod(0o755)
+            args = mock.Mock(wasm=wasm, zellij=fork, timeout=1)
             with mock.patch.object(smoke_zellij.argparse.ArgumentParser, "parse_args", return_value=args), \
-                 mock.patch.object(smoke_zellij.shutil, "which", return_value="/unused/zellij"), \
-                 mock.patch.object(smoke_zellij, "Smoke", return_value=harness), \
+                 mock.patch.object(smoke_zellij, "Smoke", return_value=harness) as smoke_class, \
                  contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                 status = smoke_zellij.main()
         harness.close.assert_called_once_with()
+        smoke_class.assert_called_once_with(fork.resolve(), wasm.resolve(), 1, mock.ANY)
         return status, output.getvalue()
 
     def test_reports_primary_and_cleanup_failure_without_replacing_primary(self):

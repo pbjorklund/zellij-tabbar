@@ -6,6 +6,8 @@ use unicode_width::UnicodeWidthStr;
 struct RecordingHost {
     calls: Vec<&'static str>,
     switches: Vec<u32>,
+    parked: Vec<Option<u64>>,
+    resumed: Vec<u64>,
     frames: Vec<String>,
     logs: Vec<String>,
     timeouts: Vec<f64>,
@@ -39,6 +41,12 @@ impl Host for RecordingHost {
     fn switch_tab(&mut self, index: u32) {
         self.switches.push(index);
     }
+    fn park_tab(&mut self, tab_id: Option<u64>) {
+        self.parked.push(tab_id);
+    }
+    fn resume_tab(&mut self, tab_id: u64) {
+        self.resumed.push(tab_id);
+    }
     fn render(&mut self, frame: &str) {
         self.frames.push(frame.to_owned());
     }
@@ -59,6 +67,13 @@ fn tab(id: usize, position: usize, active: bool) -> TabInfo {
         active,
         name: format!("work-{id}"),
         ..TabInfo::default()
+    }
+}
+
+fn parked_tab(id: usize, position: usize) -> TabInfo {
+    TabInfo {
+        is_parked: true,
+        ..tab(id, position, false)
     }
 }
 
@@ -107,6 +122,23 @@ fn missing_active_marker_keeps_the_selected_tab_renderable_and_styled() {
 }
 
 #[test]
+fn active_fallback_ignores_a_parked_active_marker_and_previous_id() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(30, 1, false)]));
+    let mut parked_active = parked_tab(10, 0);
+    parked_active.active = true;
+
+    state.update(Event::TabUpdate(vec![parked_active, tab(30, 1, false)]));
+    state.render(3, 30);
+
+    assert_eq!(state.active_tab_id, Some(30));
+    assert_eq!(state.active_tab_idx, 1);
+    assert!(!state.tabs[0].active);
+    assert!(state.tabs[1].active);
+    assert!(state.host.frames.last().unwrap().contains("2:work-30 *"));
+}
+
+#[test]
 fn missing_own_pane_drops_stale_position_after_a_tab_closes() {
     let mut state = state();
     state.update(Event::PaneUpdate(manifest(1)));
@@ -145,8 +177,8 @@ fn tab_close_recovers_in_both_snapshot_orders_without_confusing_ids() {
         }
         assert!(state.own_tab_is_active());
         assert_eq!(state.own_tab_position, Some(0));
-        state.render(2, 30);
-        state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
+        state.render(3, 30);
+        click(&mut state, 1);
         assert_eq!(state.host.switches, [2]);
         assert_eq!(state.active_tab_id, Some(20));
     }
@@ -198,11 +230,20 @@ fn empty_tabs_clear_click_targets_and_recover_on_next_snapshot() {
     state.render(2, 20);
     state.update(Event::TabUpdate(vec![]));
     state.render(2, 20);
-    state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
+    click(&mut state, 0);
     assert!(state.host.switches.is_empty());
     assert!(state.update(Event::TabUpdate(vec![tab(20, 0, true)])));
     state.render(2, 20);
-    assert_eq!(state.row_targets, [Some(1), None]);
+    assert_eq!(
+        state.row_actions,
+        [
+            Some(RowAction::SwitchTab {
+                tab_id: 20,
+                position: 0,
+            }),
+            Some(RowAction::ParkedHeader),
+        ]
+    );
 }
 
 #[test]
@@ -220,13 +261,32 @@ fn rendering_keeps_activity_click_targets_and_reserves_primary_rows() {
     )
     .unwrap();
     state.activity.insert("\u{1}work-10".into(), activity);
-    state.render(5, 30);
-    assert_eq!(state.host.frames.last().unwrap().lines().count(), 5);
+    state.render(6, 30);
+    assert_eq!(state.host.frames.last().unwrap().lines().count(), 6);
     assert_eq!(
-        state.row_targets,
-        [None, Some(1), Some(1), Some(2), Some(3)]
+        state.row_actions,
+        [
+            None,
+            Some(RowAction::SwitchTab {
+                tab_id: 10,
+                position: 0,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 10,
+                position: 0,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 20,
+                position: 1,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 30,
+                position: 2,
+            }),
+            Some(RowAction::ParkedHeader),
+        ]
     );
-    state.update(Event::Mouse(Mouse::LeftClick(2, 0)));
+    click(&mut state, 2);
     assert_eq!(state.host.switches, [1]);
 }
 
@@ -244,11 +304,65 @@ fn activity_controls_preserve_physical_rows_and_click_targets() {
         assert_eq!(frame.lines().count(), 3, "{frame:?}");
         assert!(!frame.contains(['\r', '\t']));
         assert!(frame.contains("first second third tab"));
-        assert_eq!(state.row_targets, [Some(1), Some(1), None]);
-        state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
-        state.update(Event::Mouse(Mouse::LeftClick(2, 0)));
+        assert_eq!(
+            state.row_actions,
+            [
+                Some(RowAction::SwitchTab {
+                    tab_id: 10,
+                    position: 0,
+                }),
+                Some(RowAction::SwitchTab {
+                    tab_id: 10,
+                    position: 0,
+                }),
+                Some(RowAction::ParkedHeader),
+            ]
+        );
+        click(&mut state, 1);
+        click(&mut state, 2);
         assert_eq!(state.host.switches, [1]);
     }
+}
+
+#[test]
+fn parked_rows_keep_status_and_activity_while_regular_tabs_keep_activity() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), parked_tab(20, 1)]));
+    state.pane_manifest.panes.insert(
+        1,
+        vec![PaneInfo {
+            id: 9,
+            ..PaneInfo::default()
+        }],
+    );
+    state.statuses.insert(
+        9,
+        AgentStatus {
+            runtime_id: "run".into(),
+            seq: 1,
+            mode: AgentMode::Done,
+        },
+    );
+    state.pipe(message(
+        "activity",
+        r#"{"name":"work-10","todos":[{"text":"build"}]}"#,
+    ));
+    state.pipe(message(
+        "activity",
+        r#"{"name":"work-20","todos":[{"text":"waiting"}]}"#,
+    ));
+
+    state.render(8, 30);
+
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("build"));
+    assert!(frame.contains("● work-20"));
+    assert!(frame.contains("waiting"));
+    assert!(frame.contains("Parked"));
+    assert_eq!(
+        state.row_actions[7],
+        Some(RowAction::ResumeTab { tab_id: 20 })
+    );
 }
 
 #[test]
@@ -273,15 +387,114 @@ fn overflow_rows_and_wheel_navigation_stay_in_bounds() {
     ));
     state.render(5, 32);
     assert_eq!(
-        state.row_targets,
-        [Some(4), Some(5), Some(6), Some(7), Some(8)]
+        state.row_actions,
+        [
+            Some(RowAction::SwitchTab {
+                tab_id: 23,
+                position: 3,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 24,
+                position: 4,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 25,
+                position: 5,
+            }),
+            Some(RowAction::SwitchTab {
+                tab_id: 26,
+                position: 6,
+            }),
+            Some(RowAction::ParkedHeader),
+        ]
     );
-    state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
-    state.update(Event::Mouse(Mouse::LeftClick(4, 0)));
+    click(&mut state, 0);
+    click(&mut state, 3);
     state.update(Event::Mouse(Mouse::ScrollDown(1)));
     state.update(Event::Mouse(Mouse::ScrollUp(1)));
-    state.update(Event::Mouse(Mouse::LeftClick(-1, 0)));
-    assert_eq!(state.host.switches, [4, 8, 7, 5]);
+    click(&mut state, -1);
+    assert_eq!(state.host.switches, [4, 7, 7, 5]);
+}
+
+#[test]
+fn click_release_switches_or_resumes_and_drag_release_parks_the_pressed_stable_id() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![
+        tab(10, 0, true),
+        parked_tab(20, 1),
+        tab(30, 2, false),
+    ]));
+    state.render(6, 30);
+
+    state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
+    assert!(state.host.switches.is_empty());
+    state.update(Event::Mouse(Mouse::Release(0, 0)));
+    assert_eq!(state.host.switches, [1]);
+
+    state.update(Event::Mouse(Mouse::LeftClick(5, 0)));
+    assert_eq!(state.host.resumed, [20]);
+    state.update(Event::Mouse(Mouse::Release(5, 0)));
+    assert_eq!(state.host.resumed, [20]);
+
+    state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
+    state.update(Event::Mouse(Mouse::Hold(4, 0)));
+    state.tabs = vec![tab(30, 0, true), tab(10, 1, false), parked_tab(20, 2)];
+    state.active_tab_idx = 1;
+    state.render(6, 30);
+    state.update(Event::Mouse(Mouse::Release(4, 0)));
+
+    assert_eq!(state.host.parked, [Some(10)]);
+}
+
+#[test]
+fn click_timer_switches_when_zellij_does_not_forward_mouse_release() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(20, 1, false)]));
+    state.render(6, 30);
+
+    state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
+    assert!(state.host.switches.is_empty());
+    state.update(Event::Timer(0.15));
+
+    assert_eq!(state.host.switches, [2]);
+}
+
+#[test]
+fn dropping_a_normal_tab_on_a_parked_row_parks_it() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![
+        tab(10, 0, true),
+        tab(20, 1, false),
+        parked_tab(30, 2),
+    ]));
+    state.render(6, 30);
+
+    state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
+    state.update(Event::Mouse(Mouse::Hold(5, 0)));
+    state.update(Event::Mouse(Mouse::Release(5, 0)));
+
+    assert_eq!(state.host.parked, [Some(20)]);
+}
+
+#[test]
+fn wheel_navigation_skips_parked_tabs() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![
+        tab(10, 0, true),
+        parked_tab(20, 1),
+        tab(30, 2, false),
+    ]));
+
+    state.update(Event::Mouse(Mouse::ScrollDown(1)));
+    state.active_tab_idx = 2;
+    state.update(Event::Mouse(Mouse::ScrollUp(1)));
+
+    assert_eq!(state.host.switches, [3, 1]);
+}
+
+fn click(state: &mut State, row: isize) {
+    state.update(Event::Mouse(Mouse::LeftClick(row, 0)));
+    state.update(Event::Mouse(Mouse::Release(row, 0)));
 }
 
 #[test]
@@ -298,7 +511,7 @@ fn compiled_configuration_preserves_aliases_and_explicit_variable_widths() {
     state.render(2, 10);
     assert_eq!(
         state.host.frames.last().unwrap(),
-        "0:pr...  |\x1b[m\n         |\x1b[m"
+        "0:pr...  |\x1b[m\nParked   |\x1b[m"
     );
 }
 

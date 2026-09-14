@@ -10,6 +10,7 @@ layout {
                 border "#[fg=dim]│"
                 overflow_above "  ^ +{count}"
                 overflow_below "  v +{count}"
+                parked_header "#[fg=dim,bold]Parked"
             }
         }
 

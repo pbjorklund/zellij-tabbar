@@ -14,7 +14,7 @@ Install the sidebar and load its layout. It displays your Zellij tab names, with
 3:logs
 ```
 
-Click a row to switch tabs, or scroll over the sidebar to move one tab at a time. Each tab gets its own row; overflow indicators show how many tabs are hidden. Labels, colors, borders, and width limits are configurable. Existing Zellij keyboard bindings still work.
+Click a row to switch tabs, or scroll over the sidebar to move one unparked tab at a time. Drag a tab row onto the bottom-anchored `Parked` header to park it; click a parked row to resume it. Overflow indicators show how many tabs are hidden. Labels, colors, borders, and width limits are configurable. Existing Zellij keyboard bindings still work.
 
 You can also run pi in these tabs without installing anything else. The sidebar will show ordinary tab names, but it will not detect when pi starts or finishes work.
 
@@ -133,6 +133,7 @@ pane size=32 borderless=true {
         border "#[fg=dim]│"
         overflow_above "  ^ +{count}"
         overflow_below "  v +{count}"
+        parked_header "#[fg=dim,bold]Parked"
     }
 }
 ```
@@ -146,7 +147,8 @@ pane size=32 borderless=true {
 | `padding_top` | `0` | Empty rows above the list |
 | `border` | empty | Right border text; `border_char` is a fallback alias |
 | `overflow_above` | `  ^ +{count}` | Hidden-tab count above the viewport |
-| `overflow_below` | `  v +{count}` | Hidden-tab count below the viewport |
+| `overflow_below` | `  v +{count}` | Hidden-tab count below the viewport, including the constrained parked section |
+| `parked_header` | `Parked` | Styled label and drag target above parked tabs |
 | `indicator_active` | `*` | Active-tab marker |
 | `indicator_fullscreen` | `Z` | Fullscreen marker |
 | `indicator_sync` | `S` | Synchronized-panes marker |
@@ -157,7 +159,7 @@ Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `
 
 Inline styles use `#[fg=...,bg=...,bold,dim,fill]`. Colors can be names, 8-bit indices, `#RGB`, `#RRGGBB`, or `rgb(r,g,b)`. `fill` extends the active row's background through its padding, but not its border. Raw terminal control characters in labels and activity text become spaces so each item stays on one row.
 
-When tabs overflow, the sidebar keeps the active tab in view when there is room for tab rows. Click an overflow row to move toward hidden tabs. Activity rows link to their parent tab; empty rows do not switch tabs. Existing Zellij keyboard bindings are unchanged.
+When tabs overflow, the sidebar keeps the active unparked tab in view when there is room for tab rows. Click an overflow row to move toward hidden tabs; a parked overflow row resumes the next hidden parked tab. At two or more rows, the `Parked` header stays available as a drop target at the bottom, and parked rows use only the remaining height after keeping an unparked row. Activity rows link to their parent tab, parked rows keep status markers, and empty rows do not switch tabs. Existing Zellij keyboard bindings are unchanged.
 
 ## Activity rows
 

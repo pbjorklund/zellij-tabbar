@@ -31,6 +31,14 @@ impl Host for ZellijHost {
         switch_tab_to(index);
     }
 
+    fn park_tab(&mut self, tab_id: Option<u64>) {
+        park_tab(tab_id);
+    }
+
+    fn resume_tab(&mut self, tab_id: u64) {
+        resume_tab(tab_id);
+    }
+
     fn render(&mut self, frame: &str) {
         print!("{frame}");
     }

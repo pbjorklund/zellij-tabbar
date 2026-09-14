@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run an isolated live sidebar smoke test. Requires Python 3 and Zellij.
 
-Usage: python3 scripts/smoke-zellij.py [--wasm PATH] [--timeout 20]
+Usage: python3 scripts/smoke-zellij.py [--zellij PATH] [--wasm PATH] [--timeout 20]
 No user config, installed plugin, or existing session is changed.
 """
 
@@ -16,6 +16,7 @@ from pathlib import Path
 import pty
 import select
 import shutil
+import shlex
 import signal
 import struct
 import subprocess
@@ -30,16 +31,29 @@ import uuid
 SIDEBAR_WIDTH = 38
 
 
-def sidebar_matches(lines, expected, absent=()):
-    """Require complete ASCII labels at row/col 0, space padding and a border."""
-    sidebar = [line[:SIDEBAR_WIDTH] for line in lines]
-    if len(sidebar) < len(expected):
+def sidebar_rows_match(rows, expected):
+    """Require complete ASCII labels at column 0, space padding and a border."""
+    if len(rows) != len(expected):
         return False
-    for row, label in zip(sidebar, expected):
+    for row, label in zip(rows, expected):
         text, border, remainder = row.partition("|")
         if text.rstrip(" ") != label or not border or remainder.strip(" "):
             return False
-    return not any(name in "\n".join(sidebar) for name in absent)
+    return True
+
+
+def sidebar_matches(lines, expected, absent=()):
+    """Match labels anchored to the top of the sidebar."""
+    sidebar = [line[:SIDEBAR_WIDTH] for line in lines]
+    return (sidebar_rows_match(sidebar[:len(expected)], expected)
+            and not any(name in "\n".join(sidebar) for name in absent))
+
+
+def sidebar_bottom_matches(lines, expected, absent=()):
+    """Match labels anchored to the bottom of the sidebar."""
+    sidebar = [line[:SIDEBAR_WIDTH] for line in lines]
+    return (sidebar_rows_match(sidebar[-len(expected):], expected) if expected else True) \
+        and not any(name in "\n".join(sidebar) for name in absent)
 
 
 class Screen:
@@ -189,7 +203,10 @@ show_startup_tips false
 show_release_notes false
 on_force_close "quit"
 keybinds clear-defaults=true {
-    normal { bind "Ctrl p" { MoveFocus "Left"; }; }
+    normal {
+        bind "Ctrl p" { MoveFocus "Left"; }
+        bind "Ctrl o" { ParkTab; }
+    }
 }
 ''', encoding="utf-8")
         self.base = [binary, "--session", self.session, "--config", str(config), "--config-dir", str(config_dir), "--data-dir", str(root / "data")]
@@ -198,6 +215,28 @@ keybinds clear-defaults=true {
         self.layout = root / "layout.kdl"
         self.plugin_url = "file:" + str(wasm)
         plugin_url = json.dumps(self.plugin_url)
+        self.heartbeat = root / "alpha-heartbeat"
+        heartbeat = shlex.quote(str(self.heartbeat))
+        alpha_command = json.dumps(
+            f'i=0; while :; do i=$((i + 1)); printf "alive-%s\\n" "$i"; '
+            f'printf "%s\\n" "$i" >> {heartbeat}; sleep 0.1; done'
+        )
+        self.new_tab_layout = f'''layout {{
+    tab {{
+        pane split_direction="vertical" {{
+            pane size={SIDEBAR_WIDTH} borderless=true {{
+                plugin location={plugin_url} {{
+                    format "{self.prefix}-I{{index}}:{{name}}"
+                    format_active "{self.prefix}-A{{index}}:{{name}}"
+                    max_name_length 22
+                    diagnostics "true"
+                    border "|"
+                }}
+            }}
+            pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}
+        }}
+    }}
+}}'''
         self.layout.write_text(f'''layout {{
     default_tab_template {{
         pane split_direction="vertical" {{
@@ -213,7 +252,7 @@ keybinds clear-defaults=true {
             children
         }}
     }}
-    tab name="alpha" focus=true {{ pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}; }}
+    tab name="alpha" focus=true {{ pane command="/bin/sh" {{ args "-c" {alpha_command}; }}; }}
     tab name="beta" {{ pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}; }}
     tab name="gamma" {{ pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}; }}
 }}
@@ -267,15 +306,15 @@ keybinds clear-defaults=true {
         if self.process.poll() is not None:
             raise RuntimeError(f"Zellij exited: {self.process.returncode}")
 
-    def expect(self, names, active, label, absent=()):
-        expected = [f"{self.prefix}-{'A' if name == active else 'I'}{i}:{name}"
-                    for i, name in enumerate(names, 1)]
+    def expect_labels(self, expected, active, label, bottom=(), absent=()):
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             self.pump()
             lines = self.screen.lines()
-            if sidebar_matches(lines, expected, absent):
-                print(f"PASS {label}: " + ", ".join(expected), flush=True)
+            if (sidebar_matches(lines, expected, absent)
+                    and sidebar_bottom_matches(lines, bottom, absent)):
+                rendered = expected + list(bottom)
+                print(f"PASS {label}: " + ", ".join(rendered), flush=True)
                 return
             text = "\n".join(lines).lower()
             if "permission" in "".join(text.split()) and ("[y]" in text or "(y)" in text or "(y/n)" in text):
@@ -291,7 +330,23 @@ keybinds clear-defaults=true {
                             self.granted_panes.add(pane_id)
                             break
                         self.pump()
-        raise RuntimeError(f"timed out waiting for {label}; expected {expected}\n" + "\n".join(self.screen.lines()))
+        wanted = expected + list(bottom)
+        raise RuntimeError(f"timed out waiting for {label}; expected {wanted}\n" + "\n".join(self.screen.lines()))
+
+    def expect(self, names, active, label, absent=()):
+        expected = [f"{self.prefix}-{'A' if name == active else 'I'}{i}:{name}"
+                    for i, name in enumerate(names, 1)]
+        self.expect_labels(expected, active, label, absent=absent)
+
+    def expect_parked(self, normal_tabs, active, parked_tabs, label,
+                      overflow=None, absent=()):
+        normal = [f"{self.prefix}-{'A' if name == active else 'I'}{index}:{name}"
+                  for index, name in normal_tabs]
+        parked = ["Parked"] + [f"{self.prefix}-I{index}:{name}"
+                                for index, name in parked_tabs]
+        if overflow is not None:
+            parked.append(overflow)
+        self.expect_labels(normal, active, label, bottom=parked, absent=absent)
 
     def expect_animation(self, names, active, target):
         frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -327,6 +382,30 @@ keybinds clear-defaults=true {
         self.screen.resize(rows, cols)
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         os.kill(self.process.pid, signal.SIGWINCH)
+
+    def click_sidebar(self, row):
+        y = row + 1
+        os.write(self.master, f"\x1b[<0;3;{y}M\x1b[<0;3;{y}m".encode())
+
+    def drag_sidebar(self, start_row, end_row):
+        start_y, end_y = start_row + 1, end_row + 1
+        os.write(self.master, f"\x1b[<0;3;{start_y}M".encode())
+        time.sleep(0.04)
+        os.write(self.master, f"\x1b[<32;3;{end_y}M".encode())
+        time.sleep(0.04)
+        os.write(self.master, f"\x1b[<0;3;{end_y}m".encode())
+
+    def expect_file_growth(self, path, previous_size, label):
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            self.pump()
+            try:
+                if path.stat().st_size > previous_size:
+                    print(f"PASS {label}", flush=True)
+                    return
+            except FileNotFoundError:
+                pass
+        raise RuntimeError(f"timed out waiting for {label}")
 
     def close(self):
         try:
@@ -370,6 +449,36 @@ keybinds clear-defaults=true {
         for index, name in [(2, "beta"), (3, "gamma"), (1, "alpha")]:
             self.cli("action", "go-to-tab", str(index))
             self.expect(["alpha", "beta", "gamma"], name, f"approve {name} instance")
+
+        # Park the output-producing tab through the configured key, then prove
+        # its process keeps producing output while Zellij hides the tab.
+        self.cli("action", "go-to-tab", "2")
+        self.expect(["alpha", "beta", "gamma"], "beta", "prime park fallback")
+        self.cli("action", "go-to-tab", "1")
+        self.expect(["alpha", "beta", "gamma"], "alpha", "focus live tab to park")
+        os.write(self.master, b"\x0f")
+        self.expect_parked(
+            [(2, "beta"), (3, "gamma")], "beta", [(1, "alpha")],
+            "park live tab with Ctrl o",
+        )
+        heartbeat_size = self.heartbeat.stat().st_size
+        self.expect_file_growth(
+            self.heartbeat, heartbeat_size, "parked tab keeps producing output"
+        )
+        self.click_sidebar(23)
+        self.expect(["alpha", "beta", "gamma"], "alpha", "click parked row to resume")
+
+        # Drag a normal tab to the empty, bottom-anchored Parked header.
+        self.drag_sidebar(1, 23)
+        self.expect_parked(
+            [(1, "alpha"), (3, "gamma")], "alpha", [(2, "beta")],
+            "drag normal row to Parked header",
+        )
+        self.click_sidebar(23)
+        self.expect(["alpha", "beta", "gamma"], "beta", "resume dragged tab")
+        self.cli("action", "go-to-tab", "1")
+        self.expect(["alpha", "beta", "gamma"], "alpha", "return after parked checks")
+
         alpha_pane = self.pane_for_tab("alpha")
         self.status(alpha_pane, "working", 1)
         self.expect_animation(["alpha", "beta", "gamma"], "alpha", "alpha")
@@ -399,10 +508,48 @@ keybinds clear-defaults=true {
         self.expect(["alpha", "small"], "small", "resize larger")
         self.cli("action", "go-to-tab", "1")
         self.expect(["alpha", "small"], "alpha", "switch back to original instance")
-        os.write(self.master, b"\x1b[<0;3;2M\x1b[<0;3;2m")
+        self.click_sidebar(1)
         self.expect(["alpha", "small"], "small", "click second sidebar row")
-        os.write(self.master, b"\x1b[<0;3;1M\x1b[<0;3;1m")
+        self.click_sidebar(0)
         self.expect(["alpha", "small"], "alpha", "click first sidebar row")
+        time.sleep(0.2)
+
+        added_names = [
+            "normal-three", "normal-four", "park-one", "park-two",
+            "park-three", "park-four", "park-five",
+        ]
+        all_names = ["alpha", "small"]
+        for name in added_names:
+            created_tab_id = self.cli(
+                "action", "new-tab", "--name", name,
+                "--layout-string", self.new_tab_layout,
+            ).strip()
+            if not created_tab_id.isdigit():
+                raise RuntimeError(f"new-tab returned invalid tab ID for {name}: {created_tab_id!r}")
+            all_names.append(name)
+            if not any(pane.get("tab_name") == name for pane in self.panes()):
+                raise RuntimeError(
+                    f"new-tab returned {created_tab_id} but {name} is absent from list-panes"
+                )
+            self.cli("action", "go-to-tab-name", name)
+            self.expect(all_names, name, f"approve overflow tab {name}")
+
+        normal_tabs = list(enumerate(all_names[:4], 1))
+        parked_tabs = list(enumerate(all_names[4:], 5))
+        for _, name in parked_tabs:
+            self.cli("action", "go-to-tab-name", name)
+            self.cli("action", "park-tab")
+        self.cli("action", "go-to-tab-name", "alpha")
+        self.expect_parked(
+            normal_tabs, "alpha", parked_tabs, "prepare constrained overflow"
+        )
+        self.resize(6, 70)
+        self.expect_parked(
+            [(1, "alpha")], "alpha", parked_tabs[:3],
+            "constrained normal+parked overflow", overflow="  v +2",
+            absent=("small", "normal-three", "normal-four", "park-four", "park-five"),
+        )
+
         log_text = "\n".join(path.read_text(errors="replace") for path in self.root.rglob("*.log"))
         if "event=loaded " not in log_text or "event=render " not in log_text:
             raise RuntimeError("plugin diagnostics missing from isolated Zellij logs")
@@ -410,20 +557,43 @@ keybinds clear-defaults=true {
             raise RuntimeError("diagnostics leaked into the terminal viewport")
         print("PASS diagnostics reach Zellij logs, not the sidebar", flush=True)
         plugins = [pane for pane in self.panes() if pane.get("plugin_url") == self.plugin_url]
-        if len(plugins) != 2 or any(pane["exited"] or pane["is_selectable"] for pane in plugins):
-            raise RuntimeError("expected two live, non-selectable sidebar instances")
+        if len(plugins) != len(all_names) or any(
+                pane["exited"] or pane["is_selectable"] for pane in plugins):
+            raise RuntimeError(
+                f"expected {len(all_names)} live, non-selectable sidebar instances"
+            )
+
+
+def resolve_zellij(value):
+    candidate = value.expanduser()
+    if not candidate.is_absolute() and candidate.parent == Path("."):
+        found = shutil.which(str(candidate))
+        if found is not None:
+            candidate = Path(found)
+    return candidate.resolve()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--zellij", type=Path,
+        default=Path(__file__).resolve().parents[2] / "zellij/target/release/zellij",
+        help="parked-tab fork binary (default: sibling zellij release build)",
+    )
     parser.add_argument("--wasm", type=Path, default=Path(__file__).resolve().parents[1] / "target/wasm32-wasip1/release/zellij-tabbar.wasm")
     parser.add_argument("--timeout", type=float, default=20, help="seconds per bounded action/assertion")
     args = parser.parse_args()
-    binary = shutil.which("zellij")
-    if binary is None or not args.wasm.is_file() or not math.isfinite(args.timeout) or args.timeout <= 0:
-        parser.error("need zellij in PATH, an existing WASM, and a positive timeout")
+    binary = resolve_zellij(args.zellij)
+    if (not binary.is_file() or not os.access(binary, os.X_OK)
+            or not args.wasm.is_file() or not math.isfinite(args.timeout)
+            or args.timeout <= 0):
+        parser.error("need an executable parked-tab Zellij fork, an existing WASM, and a positive timeout")
     wasm = args.wasm.resolve()
-    print(f"WASM {wasm}\nSHA256 {hashlib.sha256(wasm.read_bytes()).hexdigest()}", flush=True)
+    print(
+        f"ZELLIJ {binary}\nWASM {wasm}\n"
+        f"SHA256 {hashlib.sha256(wasm.read_bytes()).hexdigest()}",
+        flush=True,
+    )
     with tempfile.TemporaryDirectory(prefix="tabbar-smoke-", dir="/tmp") as directory:
         smoke = Smoke(binary, wasm, args.timeout, Path(directory))
         print(f"Isolated session: {smoke.session}", flush=True)
@@ -441,7 +611,7 @@ def main():
                 failed = True
         if failed:
             return 1
-    print("PASS live PTY rendering and mouse clicks; overflow, Unicode and activity rows covered only by host tests")
+    print("PASS live PTY rendering, parked tabs, constrained overflow, and mouse clicks; Unicode and activity rows covered only by host tests")
     return 0
 
 
