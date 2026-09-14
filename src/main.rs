@@ -35,6 +35,10 @@ impl Host for ZellijHost {
         print!("{frame}");
     }
 
+    fn set_timeout(&mut self, seconds: f64) {
+        set_timeout(seconds);
+    }
+
     fn log(&mut self, message: &str) {
         eprintln!("{message}");
     }

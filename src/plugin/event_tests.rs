@@ -8,6 +8,7 @@ struct RecordingHost {
     switches: Vec<u32>,
     frames: Vec<String>,
     logs: Vec<String>,
+    timeouts: Vec<f64>,
 }
 
 impl Host for RecordingHost {
@@ -40,6 +41,9 @@ impl Host for RecordingHost {
     }
     fn render(&mut self, frame: &str) {
         self.frames.push(frame.to_owned());
+    }
+    fn set_timeout(&mut self, seconds: f64) {
+        self.timeouts.push(seconds);
     }
     fn log(&mut self, message: &str) {
         self.logs.push(message.to_owned());
@@ -440,6 +444,89 @@ fn activity_pipe_renders_matching_rows_and_empty_payload_clears_them() {
     )));
     state.render(3, 32);
     assert!(!state.host.frames.last().unwrap().contains("build"));
+}
+
+#[test]
+fn pi_status_pipe_animates_in_the_visible_sidebar_without_renaming_tabs() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+    state.update(Event::Visible(true));
+
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":1,"pane_id":4,"mode":"working"}"#,
+    )));
+    assert_eq!(state.host.timeouts, [0.5]);
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("⠋ work-10"));
+
+    assert!(state.update(Event::Timer(0.5)));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("⠙ work-10"));
+    assert_eq!(state.host.timeouts, [0.5, 0.5]);
+}
+
+#[test]
+fn hidden_sidebar_retains_status_but_does_not_render_or_rearm_animation() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+
+    assert!(!state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":1,"pane_id":4,"mode":"working"}"#,
+    )));
+    assert!(state.host.timeouts.is_empty());
+    assert!(!state.update(Event::Timer(0.5)));
+    assert!(state.host.timeouts.is_empty());
+}
+
+#[test]
+fn background_done_status_is_cleared_only_when_its_tab_becomes_visible() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+    assert!(!state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":1,"pane_id":4,"mode":"done"}"#,
+    )));
+    assert_eq!(
+        state.statuses.get(&4).map(|status| status.mode),
+        Some(AgentMode::Done)
+    );
+
+    assert!(state.update(Event::Visible(true)));
+    assert!(!state.statuses.contains_key(&4));
+}
+
+#[test]
+fn stale_status_updates_and_foreign_removals_are_ignored() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+    state.update(Event::Visible(true));
+    state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-2","seq":2,"pane_id":4,"mode":"compacting"}"#,
+    ));
+    state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-2","seq":1,"pane_id":4,"mode":"working"}"#,
+    ));
+    state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"remove","runtime_id":"old-run","seq":9,"pane_id":4}"#,
+    ));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("◐ work-10"));
+
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"remove","runtime_id":"run-2","seq":3,"pane_id":4}"#,
+    )));
+    state.render(2, 30);
+    assert!(!state.host.frames.last().unwrap().contains("◐ work-10"));
 }
 
 #[test]

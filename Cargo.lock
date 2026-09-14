@@ -2621,6 +2621,8 @@ name = "zellij-tabbar"
 version = "0.1.4"
 dependencies = [
  "activity",
+ "serde",
+ "serde_json",
  "unicode-width 0.2.2",
  "zellij-tile",
 ]

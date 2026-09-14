@@ -293,6 +293,36 @@ keybinds clear-defaults=true {
                         self.pump()
         raise RuntimeError(f"timed out waiting for {label}; expected {expected}\n" + "\n".join(self.screen.lines()))
 
+    def expect_animation(self, names, active, target):
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        seen = None
+        deadline = time.monotonic() + self.timeout
+        while time.monotonic() < deadline:
+            self.pump()
+            lines = self.screen.lines()
+            for frame in frames:
+                marked = [f"{frame} {name}" if name == target else name for name in names]
+                expected = [f"{self.prefix}-{'A' if names[i - 1] == active else 'I'}{i}:{name}"
+                            for i, name in enumerate(marked, 1)]
+                if sidebar_matches(lines, expected):
+                    if seen is not None and seen != frame:
+                        print(f"PASS local status animation: {seen} -> {frame}", flush=True)
+                        return
+                    seen = frame
+                    break
+        raise RuntimeError(f"timed out waiting for local status animation; first={seen!r}")
+
+    def pane_for_tab(self, tab_name):
+        return next(pane["id"] for pane in self.panes()
+                    if pane.get("tab_name") == tab_name and not pane.get("is_plugin"))
+
+    def status(self, pane_id, mode, seq):
+        payload = json.dumps({
+            "v": 1, "kind": "snapshot", "runtime_id": "smoke", "seq": seq,
+            "pane_id": pane_id, "mode": mode,
+        })
+        self.cli("pipe", "--name", "pi_status", "--", payload)
+
     def resize(self, rows, cols):
         self.screen.resize(rows, cols)
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -335,6 +365,22 @@ keybinds clear-defaults=true {
     def run(self):
         self.start()
         self.expect(["alpha", "beta", "gamma"], "alpha", "initial custom labels")
+        # Visit each initial plugin pane so first-run permission prompts cannot
+        # hold a broadcast pipe open through Zellij's backpressure mechanism.
+        for index, name in [(2, "beta"), (3, "gamma"), (1, "alpha")]:
+            self.cli("action", "go-to-tab", str(index))
+            self.expect(["alpha", "beta", "gamma"], name, f"approve {name} instance")
+        alpha_pane = self.pane_for_tab("alpha")
+        self.status(alpha_pane, "working", 1)
+        self.expect_animation(["alpha", "beta", "gamma"], "alpha", "alpha")
+        self.status(alpha_pane, "base", 2)
+        self.expect(["alpha", "beta", "gamma"], "alpha", "clear working status")
+        self.cli("action", "go-to-tab", "2")
+        self.status(alpha_pane, "done", 3)
+        self.expect(["● alpha", "beta", "gamma"], "beta", "background completion")
+        self.cli("action", "go-to-tab", "1")
+        self.expect(["alpha", "beta", "gamma"], "alpha", "viewed completion clears")
+        self.status(alpha_pane, "base", 4)
         self.cli("action", "go-to-tab", "2")
         self.expect(["alpha", "beta", "gamma"], "beta", "switch tab")
         self.cli("action", "rename-tab", "renamed")

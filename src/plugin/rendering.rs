@@ -5,6 +5,7 @@ use super::config::StyleConfig;
 use super::formatting::{
     FormatToken, InlineStyle, StyledText, build_empty_line, build_line, parse_styled_string,
 };
+use super::status::{AgentStatus, marker};
 use crate::{calculate_visible_range, truncate_string};
 use std::collections::BTreeMap;
 use zellij_tile::prelude::{InputMode, ModeInfo, PaneManifest, TabInfo};
@@ -22,6 +23,8 @@ pub(super) struct RenderContext<'a> {
     pub(super) pane_manifest: &'a PaneManifest,
     pub(super) style: &'a StyleConfig,
     pub(super) activity: &'a BTreeMap<String, activity::Activity>,
+    pub(super) statuses: &'a BTreeMap<u32, AgentStatus>,
+    pub(super) status_frame: usize,
     pub(super) own_session: &'a str,
 }
 
@@ -40,6 +43,20 @@ impl RenderContext<'_> {
             }
         }
         None
+    }
+
+    fn status_marker(&self, tab_position: usize) -> &'static str {
+        self.pane_manifest
+            .panes
+            .get(&tab_position)
+            .and_then(|panes| {
+                panes.iter().find_map(|pane| {
+                    (!pane.is_plugin)
+                        .then(|| self.statuses.get(&pane.id))
+                        .flatten()
+                })
+            })
+            .map_or("", |status| marker(status.mode, self.status_frame))
     }
 
     fn expand_overflow_format(&self, format: &str, count: usize) -> String {
@@ -89,7 +106,7 @@ impl RenderContext<'_> {
                     let value = match name.as_str() {
                         "index" | "i" => index.to_string(),
                         "name" | "n" => {
-                            if tab.active
+                            let name = if tab.active
                                 && self.mode_info.mode == InputMode::RenameTab
                                 && tab.name.is_empty()
                             {
@@ -98,6 +115,12 @@ impl RenderContext<'_> {
                                 tab.name.clone()
                             } else {
                                 pane_title.to_owned()
+                            };
+                            let status = self.status_marker(tab.position);
+                            if status.is_empty() {
+                                name
+                            } else {
+                                format!("{status} {name}")
                             }
                         }
                         "title" | "t" | "pane_title" => pane_title.to_owned(),

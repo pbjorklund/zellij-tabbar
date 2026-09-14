@@ -4,9 +4,11 @@
 mod config;
 mod formatting;
 mod rendering;
+mod status;
 
 use self::config::StyleConfig;
 use self::rendering::RenderContext;
+use self::status::{AgentMode, AgentStatus, apply_status};
 use crate::{own_tab_is_active, scroll_target, select_active_tab};
 use std::collections::BTreeMap;
 use zellij_tile::prelude::*;
@@ -18,6 +20,7 @@ pub trait Host: Default {
     fn set_selectable(&mut self, selectable: bool);
     fn switch_tab(&mut self, index: u32);
     fn render(&mut self, frame: &str);
+    fn set_timeout(&mut self, _seconds: f64) {}
     fn log(&mut self, _message: &str) {}
 }
 
@@ -34,6 +37,10 @@ pub struct Tabbar<H: Host> {
     is_selectable: bool,
     pending_events: Vec<Event>,
     activity: BTreeMap<String, activity::Activity>,
+    statuses: BTreeMap<u32, AgentStatus>,
+    status_frame: usize,
+    timer_armed: bool,
+    visible: bool,
     own_session: String,
     own_plugin_id: Option<u32>,
     own_tab_position: Option<usize>,
@@ -61,6 +68,8 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
             EventType::Mouse,
             EventType::PermissionRequestResult,
             EventType::SessionUpdate,
+            EventType::Timer,
+            EventType::Visible,
         ]);
 
         self.host.request_permissions(&[
@@ -123,6 +132,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 self.active_tab_idx = active_tab_idx;
                 self.active_tab_id = active_tab_id;
                 self.tabs = tabs;
+                self.clear_viewed_done();
                 if missing_active {
                     self.diagnose("active_marker_missing");
                 }
@@ -134,6 +144,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 self.own_tab_position = self.find_own_tab_position(&pane_manifest);
                 should_render = self.pane_manifest != pane_manifest;
                 self.pane_manifest = pane_manifest;
+                self.clear_viewed_done();
                 if self.own_tab_position.is_none() {
                     self.diagnose("own_pane_missing");
                 }
@@ -163,6 +174,22 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                     && self.own_session != s.name
                 {
                     self.own_session = s.name.clone();
+                    should_render = true;
+                }
+            }
+            Event::Visible(visible) => {
+                self.visible = visible;
+                if visible {
+                    self.clear_viewed_done();
+                    self.arm_timer_if_needed();
+                    should_render = true;
+                }
+            }
+            Event::Timer(_) => {
+                self.timer_armed = false;
+                if self.visible && self.has_animated_status() {
+                    self.status_frame = self.status_frame.wrapping_add(1);
+                    self.arm_timer_if_needed();
                     should_render = true;
                 }
             }
@@ -216,6 +243,17 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 self.diagnose("invalid_activity");
                 false
             }
+            "pi_status" => {
+                if let Some(payload) = pipe_message.payload.as_deref()
+                    && let Some(changed) = apply_status(&mut self.statuses, payload)
+                {
+                    self.clear_viewed_done();
+                    self.arm_timer_if_needed();
+                    return changed && self.visible && self.own_tab_is_active();
+                }
+                self.diagnose("invalid_status");
+                false
+            }
             _ => false,
         }
     }
@@ -236,6 +274,8 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
             pane_manifest: &self.pane_manifest,
             style: &self.style,
             activity: &self.activity,
+            statuses: &self.statuses,
+            status_frame: self.status_frame,
             own_session: &self.own_session,
         }
         .render(rows, cols);
@@ -248,6 +288,46 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
 }
 
 impl<H: Host> Tabbar<H> {
+    fn has_animated_status(&self) -> bool {
+        self.statuses
+            .values()
+            .any(|status| matches!(status.mode, AgentMode::Working | AgentMode::Compacting))
+    }
+
+    fn arm_timer_if_needed(&mut self) {
+        if self.visible && !self.timer_armed && self.has_animated_status() {
+            self.timer_armed = true;
+            self.host.set_timeout(0.5);
+        }
+    }
+
+    fn clear_viewed_done(&mut self) {
+        if !self.visible {
+            return;
+        }
+        let Some(active_position) = self
+            .tabs
+            .iter()
+            .find(|tab| tab.active)
+            .map(|tab| tab.position)
+        else {
+            return;
+        };
+        let Some(panes) = self.pane_manifest.panes.get(&active_position) else {
+            return;
+        };
+        for pane in panes {
+            if !pane.is_plugin
+                && self
+                    .statuses
+                    .get(&pane.id)
+                    .is_some_and(|status| status.mode == AgentMode::Done)
+            {
+                self.statuses.remove(&pane.id);
+            }
+        }
+    }
+
     fn diagnose(&mut self, event: &'static str) {
         if !self.diagnostics {
             return;

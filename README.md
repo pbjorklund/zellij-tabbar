@@ -32,7 +32,7 @@ The optional [zellij-pi-tab-status](https://github.com/pbjorklund/zellij-pi-tab-
 - `●` means a background run has finished and you have not viewed its tab yet. Viewing the tab clears the marker.
 - `*` marks the active Zellij tab in the supplied layout, not agent completion.
 
-The extension waits for pi's full run to settle before marking it complete, rather than treating a pause between retries or queued follow-ups as done. It restores the base name when you view a completed tab or exit pi.
+The extension waits for pi's full run to settle before marking it complete, rather than treating a pause between retries or queued follow-ups as done. The sidebar clears completion when you view its tab; the extension removes its status when pi exits.
 
 ### Why two separate tools?
 
@@ -40,12 +40,12 @@ They run in different hosts and have different jobs:
 
 | Tool | Runs inside | Responsibility |
 | --- | --- | --- |
-| `zellij-tabbar` | Zellij, as a WASM plugin | Displays tabs, handles mouse navigation, and renders optional activity rows |
-| `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events and renames the owning Zellij tab to reflect agent state |
+| `zellij-tabbar` | Zellij, as a WASM plugin | Displays tabs, animates supplied agent status, handles mouse navigation, and renders optional activity rows |
+| `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events, publishes status transitions, and maintains the owning tab's static worktree name |
 
-The Zellij plugin can read tab names, but pi's lifecycle events come from inside pi. The extension supplies that information through ordinary Zellij tab renames, so neither tool depends on the other: this sidebar works without pi, and the status extension also works with Zellij's built-in tab bar.
+The extension sends a `pi_status` snapshot only when lifecycle state changes. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
 
-Extra todo and subagent rows use the separate [activity pipe](#activity-rows). Any compatible producer can send them, with or without pi. The status extension only renames tabs; it does not send activity rows.
+The sidebar still works without pi. The companion extension now requires this sidebar to display status; Zellij's built-in horizontal tab bar shows only the static tab name. Extra todo and subagent rows use the separate [activity pipe](#activity-rows).
 
 ## Install the sidebar
 
@@ -108,7 +108,7 @@ The [main layout](examples/vertical-tabs-left.kdl) uses 32 columns. The optional
 
 ## Install pi status (optional)
 
-Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.84.3 or newer and Zellij's `list-panes`, `list-tabs`, and `rename-tab-by-id` actions.
+Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.84.3 or newer and Zellij's `list-panes`, `list-tabs`, `rename-tab-by-id`, and `pipe` actions.
 
 Install the companion package:
 
@@ -122,7 +122,7 @@ To try the workflow, start a task in pi, then switch to another tab before it fi
 
 ## Configure the sidebar
 
-Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the Zellij tab name, including any markers supplied by the optional status extension:
+Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the tab's status marker followed by its static Zellij name when the companion extension is active:
 
 ```kdl
 pane size=32 borderless=true {
@@ -161,7 +161,7 @@ When tabs overflow, the sidebar keeps the active tab in view when there is room 
 
 ## Activity rows
 
-An activity producer can add todo or subagent rows beneath a tab. This is an optional API, not part of the companion status extension's tab-renaming workflow.
+An activity producer can add todo or subagent rows beneath a tab. This remains separate from the companion extension's `pi_status` lifecycle snapshots.
 
 For a quick test inside Zellij, replace `worktree-name` with the matching focused-pane title, or tab name if no usable pane title exists:
 
@@ -205,7 +205,7 @@ Check permissions, the layout's plugin URL, and `zellij setup --check`. A `tab-b
 
 ### Tabs show names but no pi status
 
-Ordinary names are expected in standalone use. If you want automatic pi markers, follow [Install pi status](#install-pi-status-optional), then check that pi is running in its TUI inside Zellij. Keep `{name}` in both sidebar formats: `{title}` reads the focused-pane title instead. The activity pipe is not needed for tab status.
+Ordinary names are expected in standalone use. If you want automatic pi markers, install both the current sidebar build and the companion extension, then check that pi is running in its TUI inside Zellij. Keep `{name}` in both sidebar formats: status is attached to `{name}`, while `{title}` reads only the focused-pane title. The activity pipe is not needed for tab status.
 
 ### Sidebar stops updating
 
@@ -248,7 +248,7 @@ For a live check after building:
 python3 scripts/smoke-zellij.py
 ```
 
-The smoke test creates its own disposable PTY session and checks sidebar output through tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar, not the companion pi extension or an intermittent hang in an existing session.
+The smoke test creates its own disposable PTY session and checks local status animation, completion clearing, tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar protocol, not the companion pi extension or an intermittent hang in an existing session.
 
 Run `cargo bench --locked --bench plugin` for host rendering and permission-replay benchmarks. Activity cases cover 1,000 subagents and a 1MB title in a three-row viewport, to catch work on text and rows that cannot fit. Compare timings on the same machine; they exclude Zellij's WASM execution and terminal output.
 
