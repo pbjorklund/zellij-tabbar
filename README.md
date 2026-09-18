@@ -43,7 +43,7 @@ They run in different hosts and have different jobs:
 | `zellij-tabbar` | Zellij, as a WASM plugin | Displays tabs, animates supplied agent status, handles mouse navigation, and renders optional activity rows |
 | `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events, publishes status transitions, and maintains the owning tab's static worktree name |
 
-The extension sends a `pi_status` snapshot only when lifecycle state changes. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
+The extension sends a `pi_status` snapshot when lifecycle state changes and replays the same active snapshot every five seconds so newly loaded sidebars catch up. Existing sidebars ignore the duplicate sequence. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
 
 The sidebar still works without pi. The companion extension now requires this sidebar to display status; Zellij's built-in horizontal tab bar shows only the static tab name. Extra todo and subagent rows use the separate [activity pipe](#activity-rows).
 
