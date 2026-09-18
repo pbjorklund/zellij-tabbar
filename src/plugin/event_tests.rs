@@ -206,6 +206,26 @@ fn inactive_snapshots_are_retained_and_rendered_on_reactivation() {
 }
 
 #[test]
+fn visible_sidebar_renders_when_another_client_owns_the_global_active_marker() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    assert!(!state.update(Event::TabUpdate(vec![tab(10, 0, false), tab(20, 1, true),])));
+
+    assert!(state.update(Event::Visible(true)));
+    let mut renamed = tab(10, 0, false);
+    renamed.name = "visible to another client".into();
+    assert!(state.update(Event::TabUpdate(vec![renamed, tab(20, 1, true)])));
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":1,"pane_id":4,"mode":"working"}"#,
+    )));
+    state.render(3, 30);
+
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("⠋ visible to"));
+}
+
+#[test]
 fn loading_subscribes_before_requesting_permissions_and_replays_in_order() {
     let mut state = State::default();
     state.load(BTreeMap::new());

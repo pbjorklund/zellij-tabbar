@@ -252,7 +252,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
             }
             _ => {}
         }
-        let allowed = should_render && self.own_tab_is_active();
+        let allowed = should_render && self.should_render_here();
         self.diagnose(if allowed {
             "refresh_requested"
         } else if should_render {
@@ -289,7 +289,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                     && let Some((zsession, name, act)) = activity::parse_activity(payload)
                 {
                     self.activity.insert(format!("{zsession}\u{1}{name}"), act);
-                    let allowed = self.own_tab_is_active();
+                    let allowed = self.should_render_here();
                     self.diagnose(if allowed {
                         "activity_refresh"
                     } else {
@@ -306,7 +306,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 {
                     self.clear_viewed_done();
                     self.arm_timer_if_needed();
-                    return changed && self.visible && self.own_tab_is_active();
+                    return changed && self.visible;
                 }
                 self.diagnose("invalid_status");
                 false
@@ -401,6 +401,10 @@ impl<H: Host> Tabbar<H> {
             self.own_tab_position, self.render_size,
             self.tabs.iter().find(|tab| Some(tab.tab_id) == self.active_tab_id).map(|tab| tab.position),
         ));
+    }
+
+    fn should_render_here(&self) -> bool {
+        self.visible || self.own_tab_is_active()
     }
 
     fn own_tab_is_active(&self) -> bool {
