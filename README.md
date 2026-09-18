@@ -51,14 +51,14 @@ The sidebar still works without pi. The companion extension now requires this si
 
 Zellij is the only runtime requirement for standalone use. This repository's live smoke test was tested with Zellij 0.45.0; the plugin builds against `zellij-tile` 0.44.3.
 
-Download [v0.1.4](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.1.4), verify its checksum, and install the WASM:
+Download [v0.3.0](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.3.0), verify its checksum, and install the WASM:
 
 ```sh
 (
   set -eu
   download_dir=$(mktemp -d)
   cd "$download_dir"
-  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.1.4
+  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.3.0
   curl -fLO "$release/zellij-tabbar.wasm"
   curl -fLO "$release/SHA256SUMS"
   sha256sum --check SHA256SUMS
