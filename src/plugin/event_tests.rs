@@ -361,6 +361,7 @@ fn parked_rows_keep_status_and_activity_while_regular_tabs_keep_activity() {
             runtime_id: "run".into(),
             seq: 1,
             mode: AgentMode::Done,
+            watchers: String::new(),
         },
     );
     state.pipe(message(
@@ -698,6 +699,50 @@ fn pi_status_pipe_animates_in_the_visible_sidebar_without_renaming_tabs() {
     state.render(2, 30);
     assert!(state.host.frames.last().unwrap().contains("⠙ work-10"));
     assert_eq!(state.host.timeouts, [0.5, 0.5]);
+}
+
+#[test]
+fn watcher_suffix_survives_truncation_and_tracks_the_owning_pane() {
+    let mut state = state();
+    state.style.max_name_length = 8;
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(20, 1, false)]));
+    let mut panes = manifest(0);
+    panes.panes.insert(
+        1,
+        vec![PaneInfo {
+            id: 9,
+            ..PaneInfo::default()
+        }],
+    );
+    state.update(Event::PaneUpdate(panes));
+    state.update(Event::Visible(true));
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":1,"pane_id":9,"mode":"working","watchers":"SRPICC"}"#,
+    )));
+    state.render(3, 30);
+    let frame = state.host.frames.last().unwrap().replace("\x1b[m", "");
+    assert!(frame.contains("2:⠋ CIPRS"), "{frame:?}");
+    assert!(frame.contains("1:work-10 *"), "{frame:?}");
+    assert_eq!(state.tabs[1].name, "work-20");
+    for line in frame.lines() {
+        assert!(line.width() <= 30);
+    }
+
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":2,"pane_id":9,"mode":"done","watchers":"R"}"#,
+    )));
+    state.render(3, 30);
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains(" R"), "{frame:?}");
+    assert!(frame.contains('●'), "{frame:?}");
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":3,"pane_id":9,"mode":"base"}"#,
+    )));
+    state.render(3, 30);
+    assert!(!state.host.frames.last().unwrap().contains(" R"));
 }
 
 #[test]

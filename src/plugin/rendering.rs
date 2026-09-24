@@ -46,7 +46,7 @@ impl RenderContext<'_> {
         None
     }
 
-    fn status_marker(&self, tab_position: usize) -> &'static str {
+    fn status_for_tab(&self, tab_position: usize) -> Option<&AgentStatus> {
         self.pane_manifest
             .panes
             .get(&tab_position)
@@ -57,7 +57,6 @@ impl RenderContext<'_> {
                         .flatten()
                 })
             })
-            .map_or("", |status| marker(status.mode, self.status_frame))
     }
 
     fn expand_overflow_format(&self, format: &str, count: usize) -> String {
@@ -126,7 +125,9 @@ impl RenderContext<'_> {
                             } else {
                                 pane_title.to_owned()
                             };
-                            let status = self.status_marker(tab.position);
+                            let status = self
+                                .status_for_tab(tab.position)
+                                .map_or("", |status| marker(status.mode, self.status_frame));
                             if status.is_empty() {
                                 name
                             } else {
@@ -159,12 +160,34 @@ impl RenderContext<'_> {
                         _ => format!("{{{name}}}"),
                     };
 
-                    let text = if let Some(w) = width {
-                        truncate_string(&value, *w)
+                    let budget = width.unwrap_or(self.style.max_name_length);
+                    let suffix = if matches!(name.as_str(), "name" | "n") {
+                        self.status_for_tab(tab.position)
+                            .filter(|status| !status.watchers.is_empty())
+                            .map(|status| format!(" {}", status.watchers))
+                            .unwrap_or_default()
                     } else {
-                        truncate_string(&value, self.style.max_name_length)
+                        String::new()
                     };
-
+                    let text = if suffix.len() >= budget {
+                        let marker = self
+                            .status_for_tab(tab.position)
+                            .map_or("", |status| marker(status.mode, self.status_frame));
+                        format!(
+                            "{}{}",
+                            marker,
+                            truncate_string(&suffix, budget.saturating_sub(marker.chars().count()))
+                        )
+                    } else {
+                        let name_budget = budget - suffix.len();
+                        let name = if name_budget <= 2 {
+                            self.status_for_tab(tab.position)
+                                .map_or("", |status| marker(status.mode, self.status_frame))
+                        } else {
+                            &value
+                        };
+                        format!("{}{}", truncate_string(name, name_budget), suffix)
+                    };
                     result.push(text, current_style.clone());
                 }
                 FormatToken::Literal(text) => {
