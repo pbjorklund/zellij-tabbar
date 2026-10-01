@@ -15,6 +15,10 @@ impl Host for ZellijHost {
         get_plugin_ids().plugin_id
     }
 
+    fn get_pane_cwd(&mut self, pane_id: u32) -> Option<std::path::PathBuf> {
+        get_pane_cwd(PaneId::Terminal(pane_id)).ok()
+    }
+
     fn subscribe(&mut self, events: &[EventType]) {
         subscribe(events);
     }

@@ -6,7 +6,9 @@ This project is based on [cfal/zellij-vertical-tabs](https://github.com/cfal/zel
 
 ## Use it without pi
 
-Install the sidebar and load its layout. It displays your Zellij tab names, with the focused terminal pane's title as a fallback for default names:
+Install the sidebar and load its layout. Explicit tab names stay unchanged. For default names, the current source build displays the focused terminal pane's directory name and updates it after `cd`, pane focus changes, and worktree entry. It uses upstream Zellij's cwd metadata, not Bash naming hooks. If cwd is unavailable, it falls back to the pane title.
+
+Directory labels do not infer a Git branch or repository name. A worktree at `/projects/app-feature` appears as `app-feature`; `/` appears as `/`. These cwd labels are not in the published v0.3.0 WASM, which falls back to pane titles.
 
 ```text
 1:editor*
@@ -20,12 +22,12 @@ You can also run pi in these tabs without installing anything else. The sidebar 
 
 ## Add pi status
 
-The optional [zellij-pi-tab-status](https://github.com/pbjorklund/zellij-pi-tab-status) extension gives pi's owning tab a worktree or directory name and updates it with agent status. For example:
+The optional [zellij-pi-tab-status](https://github.com/pbjorklund/zellij-pi-tab-status) extension supplies pane-scoped agent status. The sidebar owns displayed labels; the companion does not rename tabs or overwrite explicit user names. For example:
 
 ```text
-1:⠹ app:fix-login
-2:● app:add-search
-3:app:main*
+1:⠹ app-fix-login
+2:● app-add-search
+3:app*
 ```
 
 - The spinner means pi or a tracked subagent is working.
@@ -41,8 +43,8 @@ They run in different hosts and have different jobs:
 
 | Tool | Runs inside | Responsibility |
 | --- | --- | --- |
-| `zellij-tabbar` | Zellij, as a WASM plugin | Displays tabs, animates supplied agent status, handles mouse navigation, and renders optional activity rows |
-| `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events, publishes status transitions, and maintains the owning tab's static worktree name |
+| `zellij-tabbar` | Zellij, as a WASM plugin | Owns displayed labels, animates supplied status, handles mouse navigation, and renders optional activity rows |
+| `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events and publishes pane-scoped status transitions without renaming tabs |
 
 The extension sends a `pi_status` v1 snapshot when lifecycle state changes and replays the same active snapshot every five seconds so newly loaded sidebars catch up. A snapshot may include a `watchers` string; missing means no watch letters. The sidebar keeps only distinct `CIPRS` letters in that order, scoped to the owning pane and cleared on removal. Older snapshots remain valid. Existing sidebars ignore the duplicate sequence. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
 
@@ -50,7 +52,7 @@ The sidebar still works without pi. The companion extension now requires this si
 
 ## Install the sidebar
 
-Zellij is the only runtime requirement for standalone use. This repository's live smoke test was tested with Zellij 0.45.0; the plugin builds against `zellij-tile` 0.44.3.
+Zellij is the only runtime requirement for standalone use. Hook-free naming is tested with upstream Zellij 0.45.1. The checkout currently builds against its pinned `zellij-tile` 0.46.0 fork; parked-tab behavior requires that fork. The separate upstream naming test does not use parked actions.
 
 Download [v0.3.0](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.3.0), verify its checksum, and install the WASM:
 
@@ -109,7 +111,7 @@ The [main layout](examples/vertical-tabs-left.kdl) uses 32 columns. The optional
 
 ## Install pi status (optional)
 
-Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.84.3 or newer and Zellij's `list-panes`, `list-tabs`, `rename-tab-by-id`, and `pipe` actions.
+Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.84.3 or newer and Zellij's `list-panes`, `list-tabs`, and `pipe` actions.
 
 Install the companion package:
 
@@ -123,7 +125,7 @@ To try the workflow, start a task in pi, then switch to another tab before it fi
 
 ## Configure the sidebar
 
-Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the tab's status marker, static Zellij name, and any watch letters when supplied by a `pi_status` snapshot:
+Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the status marker, explicit tab name or directory label, and any watch letters. A `pi_status` snapshot supplies status, not the name:
 
 ```kdl
 pane size=32 borderless=true {
@@ -156,7 +158,7 @@ pane size=32 borderless=true {
 | `activity_format` | `#[fg=dim]{activity}` | Style wrapper for activity rows |
 | `diagnostics` | `false` | Set to `"true"` for sampled diagnostics in Zellij's log |
 
-Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `{sync}`, and `{active}`. Use `{=12:title}` to limit a variable to 12 display columns. Default tab names fall back to the focused non-plugin pane's title; placeholder titles fall back to `...`.
+Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `{sync}`, and `{active}`. Use `{=12:title}` to limit a variable to 12 display columns. Default tab names use the focused non-plugin pane's cwd basename. When cwd is unavailable they fall back to its title; placeholder titles fall back to `...`. `{title}` still displays the pane title and does not use cwd. The sidebar does not write these labels back to Zellij tab names.
 
 Inline styles use `#[fg=...,bg=...,bold,dim,fill]`. Colors can be names, 8-bit indices, `#RGB`, `#RRGGBB`, or `rgb(r,g,b)`. `fill` extends the active row's background through its padding, but not its border. Raw terminal control characters in labels and activity text become spaces so each item stays on one row.
 
@@ -250,6 +252,16 @@ For a live check after building:
 ```sh
 python3 scripts/smoke-zellij.py
 ```
+
+For hook-free naming against upstream Zellij, run:
+
+```sh
+python3 scripts/smoke-naming.py --zellij /usr/bin/zellij
+```
+
+This separate disposable test starts Bash with profiles and rc files disabled, checks directory/worktree labels, pane focus/movement, explicit names and tab movement, and verifies cleanup. It does not test parked tabs or install the built WASM.
+
+The full smoke test requires the parked-tab fork; native Zellij 0.45.1 lacks ParkTab.
 
 The smoke test creates its own disposable PTY session and checks local status animation, completion clearing, tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar protocol, not the companion pi extension or an intermittent hang in an existing session.
 

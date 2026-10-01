@@ -11,14 +11,21 @@ struct RecordingHost {
     frames: Vec<String>,
     logs: Vec<String>,
     timeouts: Vec<f64>,
+    cwd_results: BTreeMap<u32, std::path::PathBuf>,
+    cwd_queries: Vec<u32>,
 }
 
 impl Host for RecordingHost {
     fn plugin_id(&mut self) -> u32 {
         4
     }
+    fn get_pane_cwd(&mut self, pane_id: u32) -> Option<std::path::PathBuf> {
+        self.cwd_queries.push(pane_id);
+        self.cwd_results.get(&pane_id).cloned()
+    }
     fn subscribe(&mut self, events: &[EventType]) {
         assert!(events.contains(&EventType::PermissionRequestResult));
+        assert!(events.contains(&EventType::CwdChanged));
         self.calls.push("subscribe");
     }
     fn request_permissions(&mut self, permissions: &[PermissionType]) {
@@ -104,6 +111,269 @@ fn state() -> State {
     state.load(BTreeMap::new());
     state.update(Event::PermissionRequestResult(PermissionStatus::Granted));
     state
+}
+
+#[test]
+fn cwd_labels_refresh_without_changing_title_or_explicit_names() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![TabInfo {
+        name: "Tab #1".into(),
+        ..tab(10, 0, true)
+    }]));
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/worktree-task14".into(),
+        vec![],
+    ));
+    state.render(1, 40);
+    assert!(
+        state
+            .host
+            .frames
+            .last()
+            .unwrap()
+            .contains("1:worktree-task14 *")
+    );
+
+    state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/other".into(),
+        vec![],
+    ));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("1:other *"));
+    state.style.apply(&BTreeMap::from([(
+        "format_active".into(),
+        "{name}|{title}".into(),
+    )]));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("other|project"));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+    state.render(1, 40);
+    assert!(
+        state
+            .host
+            .frames
+            .last()
+            .unwrap()
+            .contains("work-10|project")
+    );
+}
+
+fn default_tab(id: usize, position: usize, active: bool) -> TabInfo {
+    TabInfo {
+        name: format!("Tab #{}", position + 1),
+        ..tab(id, position, active)
+    }
+}
+
+#[test]
+fn cwd_initial_lookup_waits_for_permission_and_is_cached_outside_render() {
+    let mut state = State::default();
+    state.host.cwd_results.insert(4, "/projects/initial".into());
+    state.load(BTreeMap::new());
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![default_tab(90, 0, true)]));
+    assert!(state.host.cwd_queries.is_empty());
+    state.update(Event::PermissionRequestResult(PermissionStatus::Granted));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("1:initial *"));
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.render(1, 40);
+    assert_eq!(state.host.cwd_queries, [4]);
+    assert!(!state.update(Event::CwdChanged(
+        PaneId::Plugin(4),
+        "/wrong".into(),
+        vec![]
+    )));
+    assert!(state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/changed".into(),
+        vec![]
+    )));
+    assert!(!state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/changed".into(),
+        vec![]
+    )));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("1:changed *"));
+    assert_eq!(state.host.cwd_queries, [4]);
+}
+
+#[test]
+fn cwd_focus_changes_do_not_change_status_selection_or_activity_matching() {
+    let mut state = state();
+    state.host.cwd_results = BTreeMap::from([
+        (4, "/projects/first".into()),
+        (9, "/worktrees/second".into()),
+    ]);
+    state.update(Event::TabUpdate(vec![default_tab(90, 0, true)]));
+    let mut panes = manifest(0);
+    panes.panes.get_mut(&0).unwrap().push(PaneInfo {
+        id: 9,
+        title: "second-title".into(),
+        ..PaneInfo::default()
+    });
+    state.update(Event::PaneUpdate(panes.clone()));
+    state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"first","seq":1,"pane_id":4,"mode":"working","watchers":"CIPRS"}"#));
+    state.pipe(message(
+        "activity",
+        r#"{"name":"project","todos":[{"text":"first-todo"}]}"#,
+    ));
+    state.pipe(message(
+        "activity",
+        r#"{"name":"second-title","todos":[{"text":"second-todo"}]}"#,
+    ));
+    state.render(3, 40);
+    assert!(state.host.frames.last().unwrap().contains("⠋ first"));
+    assert!(state.host.frames.last().unwrap().contains("first-todo"));
+    for pane in panes.panes.get_mut(&0).unwrap() {
+        pane.is_focused = pane.id == 9 && !pane.is_plugin;
+    }
+    state.update(Event::PaneUpdate(panes));
+    state.render(3, 40);
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("⠋ second"));
+    assert!(frame.contains("second-todo"));
+    assert!(!frame.contains("first-todo"));
+    click(&mut state, 1);
+    assert_eq!(state.host.switches, [1]);
+    assert_eq!(state.host.cwd_queries, [4, 9]);
+}
+
+#[test]
+fn cwd_labels_follow_moves_and_closed_panes_are_pruned_in_both_orders() {
+    for panes_first in [true, false] {
+        let mut state = state();
+        state.host.cwd_results.insert(4, "/worktrees/task14".into());
+        state.update(Event::TabUpdate(vec![
+            default_tab(90, 0, true),
+            tab(20, 1, false),
+        ]));
+        state.update(Event::PaneUpdate(manifest(0)));
+        let panes = Event::PaneUpdate(manifest(1));
+        let tabs = Event::TabUpdate(vec![tab(20, 0, false), default_tab(90, 1, true)]);
+        for event in if panes_first {
+            [panes, tabs]
+        } else {
+            [tabs, panes]
+        } {
+            state.update(event);
+        }
+        state.render(3, 40);
+        assert!(state.host.frames.last().unwrap().contains("2:task14 *"));
+        click(&mut state, 1);
+        assert_eq!(state.host.switches, [2]);
+        assert_eq!(state.host.cwd_queries, [4]);
+        let panes = Event::PaneUpdate(PaneManifest::default());
+        let tabs = Event::TabUpdate(vec![default_tab(20, 0, true)]);
+        for event in if panes_first {
+            [panes, tabs]
+        } else {
+            [tabs, panes]
+        } {
+            state.update(event);
+        }
+        state.render(1, 40);
+        assert!(!state.host.frames.last().unwrap().contains("task14"));
+        assert!(state.pane_cwds.is_empty());
+        state
+            .host
+            .cwd_results
+            .insert(4, "/projects/reopened".into());
+        state.update(Event::PaneUpdate(manifest(0)));
+        state.render(1, 40);
+        assert!(state.host.frames.last().unwrap().contains("1:reopened *"));
+        assert_eq!(state.host.cwd_queries, [4, 4]);
+    }
+}
+
+#[test]
+fn cwd_missing_falls_back_without_title_path_inference_and_queries_only_once() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![default_tab(90, 0, true)]));
+    let mut panes = manifest(0);
+    panes.panes.get_mut(&0).unwrap()[1].title = "bash /not/a/cwd".into();
+    state.update(Event::PaneUpdate(panes.clone()));
+    state.render(1, 40);
+    assert!(
+        state
+            .host
+            .frames
+            .last()
+            .unwrap()
+            .contains("bash /not/a/cwd")
+    );
+    for title in ["", "Pane #4", "Tab #1"] {
+        panes.panes.get_mut(&0).unwrap()[1].title = title.into();
+        state.update(Event::PaneUpdate(panes.clone()));
+        state.render(1, 40);
+        assert!(state.host.frames.last().unwrap().contains("1:... *"));
+    }
+    assert_eq!(state.host.cwd_queries, [4]);
+    state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/now-known".into(),
+        vec![],
+    ));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("1:now-known *"));
+}
+
+#[test]
+fn cwd_paths_keep_unicode_width_and_sanitize_controls_with_a_root_fallback() {
+    let mut state = state();
+    state.update(Event::TabUpdate(vec![default_tab(90, 0, true)]));
+    state.update(Event::PaneUpdate(manifest(0)));
+    for (path, label) in [
+        ("/", "/"),
+        ("/projects/界e\u{301}/", "界e\u{301}"),
+        ("/projects/a\nb\rc\td\u{1b}e", "a b c d e"),
+    ] {
+        state.update(Event::CwdChanged(PaneId::Terminal(4), path.into(), vec![]));
+        state.render(1, 40);
+        let frame = state.host.frames.last().unwrap().replace("\x1b[m", "");
+        assert!(frame.contains(&format!("1:{label} *")), "{frame:?}");
+        assert_eq!(frame.lines().count(), 1);
+        assert!(!frame.contains(['\r', '\t', '\x1b']));
+    }
+    state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/projects/界界界界界".into(),
+        vec![],
+    ));
+    state.style.max_name_length = 5;
+    state.render(1, 9);
+    let frame = state.host.frames.last().unwrap().replace("\x1b[m", "");
+    assert!(frame.contains("界..."));
+    assert!(frame.width() <= 9);
+    state.update(Event::TabUpdate(vec![TabInfo {
+        name: String::new(),
+        ..tab(90, 0, true)
+    }]));
+    state.mode_info.mode = InputMode::RenameTab;
+    state.style.max_name_length = 20;
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("Enter name..."));
+}
+
+#[test]
+fn cwd_event_before_manifest_survives_permission_replay_without_querying() {
+    let mut state = State::default();
+    state.load(BTreeMap::new());
+    state.update(Event::CwdChanged(
+        PaneId::Terminal(4),
+        "/early".into(),
+        vec![],
+    ));
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![default_tab(90, 0, true)]));
+    state.update(Event::PermissionRequestResult(PermissionStatus::Granted));
+    state.render(1, 40);
+    assert!(state.host.frames.last().unwrap().contains("1:early *"));
+    assert!(state.host.cwd_queries.is_empty());
 }
 
 #[test]

@@ -9,6 +9,7 @@ use super::formatting::{
 use super::status::{AgentStatus, marker};
 use crate::{calculate_visible_range, truncate_string};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use zellij_tile::prelude::{InputMode, ModeInfo, PaneManifest, TabInfo};
 
 pub(super) struct Frame {
@@ -22,6 +23,7 @@ pub(super) struct RenderContext<'a> {
     pub(super) active_tab_idx: usize,
     pub(super) mode_info: &'a ModeInfo,
     pub(super) pane_manifest: &'a PaneManifest,
+    pub(super) pane_cwds: &'a BTreeMap<u32, Option<PathBuf>>,
     pub(super) style: &'a StyleConfig,
     pub(super) activity: &'a BTreeMap<String, activity::Activity>,
     pub(super) statuses: &'a BTreeMap<u32, AgentStatus>,
@@ -44,6 +46,19 @@ impl RenderContext<'_> {
             }
         }
         None
+    }
+
+    fn focused_pane_directory(&self, tab_position: usize) -> Option<String> {
+        let pane = self
+            .pane_manifest
+            .panes
+            .get(&tab_position)?
+            .iter()
+            .find(|pane| pane.is_focused && !pane.is_plugin)?;
+        let cwd = self.pane_cwds.get(&pane.id)?.as_ref()?;
+        cwd.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .or_else(|| (cwd.as_os_str() == "/").then(|| "/".to_owned()))
     }
 
     fn status_for_tab(&self, tab_position: usize) -> Option<&AgentStatus> {
@@ -123,7 +138,8 @@ impl RenderContext<'_> {
                             } else if !tab.name.starts_with("Tab #") && !tab.name.is_empty() {
                                 tab.name.clone()
                             } else {
-                                pane_title.to_owned()
+                                self.focused_pane_directory(tab.position)
+                                    .unwrap_or_else(|| pane_title.to_owned())
                             };
                             let status = self
                                 .status_for_tab(tab.position)
@@ -416,6 +432,7 @@ mod tests {
             active_tab_idx: 1,
             mode_info: &ModeInfo::default(),
             pane_manifest: &PaneManifest::default(),
+            pane_cwds: &BTreeMap::new(),
             style: &StyleConfig::default(),
             activity: &BTreeMap::new(),
             statuses: &BTreeMap::new(),
@@ -506,6 +523,7 @@ mod tests {
             active_tab_idx: 1,
             mode_info: &ModeInfo::default(),
             pane_manifest: &PaneManifest::default(),
+            pane_cwds: &BTreeMap::new(),
             style: &style,
             activity: &BTreeMap::new(),
             statuses: &BTreeMap::new(),

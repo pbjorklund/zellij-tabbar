@@ -10,7 +10,8 @@ use self::config::StyleConfig;
 use self::rendering::RenderContext;
 use self::status::{AgentMode, AgentStatus, apply_status};
 use crate::{own_tab_is_active, scroll_target, select_active_tab};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use zellij_tile::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +23,9 @@ pub(super) enum RowAction {
 
 pub trait Host: Default {
     fn plugin_id(&mut self) -> u32;
+    fn get_pane_cwd(&mut self, _pane_id: u32) -> Option<PathBuf> {
+        None
+    }
     fn subscribe(&mut self, events: &[EventType]);
     fn request_permissions(&mut self, permissions: &[PermissionType]);
     fn set_selectable(&mut self, selectable: bool);
@@ -41,6 +45,7 @@ pub struct Tabbar<H: Host> {
     active_tab_id: Option<usize>,
     mode_info: ModeInfo,
     pane_manifest: PaneManifest,
+    pane_cwds: BTreeMap<u32, Option<PathBuf>>,
     style: StyleConfig,
     permissions_granted: bool,
     is_selectable: bool,
@@ -75,6 +80,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
         self.host.subscribe(&[
             EventType::TabUpdate,
             EventType::PaneUpdate,
+            EventType::CwdChanged,
             EventType::ModeUpdate,
             EventType::Mouse,
             EventType::PermissionRequestResult,
@@ -166,9 +172,29 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 self.own_tab_position = self.find_own_tab_position(&pane_manifest);
                 should_render = self.pane_manifest != pane_manifest;
                 self.pane_manifest = pane_manifest;
+                let terminal_ids: BTreeSet<_> = self
+                    .pane_manifest
+                    .panes
+                    .values()
+                    .flatten()
+                    .filter(|pane| !pane.is_plugin)
+                    .map(|pane| pane.id)
+                    .collect();
+                self.pane_cwds.retain(|id, _| terminal_ids.contains(id));
+                for id in terminal_ids {
+                    self.pane_cwds
+                        .entry(id)
+                        .or_insert_with(|| self.host.get_pane_cwd(id));
+                }
                 self.clear_viewed_done();
                 if self.own_tab_position.is_none() {
                     self.diagnose("own_pane_missing");
+                }
+            }
+            Event::CwdChanged(PaneId::Terminal(id), cwd, _) => {
+                if self.pane_cwds.get(&id) != Some(&Some(cwd.clone())) {
+                    self.pane_cwds.insert(id, Some(cwd));
+                    should_render = true;
                 }
             }
             Event::Mouse(me) => match me {
@@ -329,6 +355,7 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
             active_tab_idx: self.active_tab_idx,
             mode_info: &self.mode_info,
             pane_manifest: &self.pane_manifest,
+            pane_cwds: &self.pane_cwds,
             style: &self.style,
             activity: &self.activity,
             statuses: &self.statuses,
