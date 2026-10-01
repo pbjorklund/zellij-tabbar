@@ -17,8 +17,6 @@ use zellij_tile::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RowAction {
     SwitchTab { tab_id: u64, position: usize },
-    ResumeTab { tab_id: u64 },
-    ParkedHeader,
 }
 
 pub trait Host: Default {
@@ -30,8 +28,6 @@ pub trait Host: Default {
     fn request_permissions(&mut self, permissions: &[PermissionType]);
     fn set_selectable(&mut self, selectable: bool);
     fn switch_tab(&mut self, index: u32);
-    fn park_tab(&mut self, tab_id: Option<u64>);
-    fn resume_tab(&mut self, tab_id: u64);
     fn render(&mut self, frame: &str);
     fn set_timeout(&mut self, _seconds: f64) {}
     fn log(&mut self, _message: &str) {}
@@ -130,25 +126,14 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 self.mode_info = mode_info;
             }
             Event::TabUpdate(mut tabs) => {
-                for tab in &mut tabs {
-                    if tab.is_parked {
-                        tab.active = false;
-                    }
-                }
-                let missing_active =
-                    tabs.iter().any(|tab| !tab.is_parked) && !tabs.iter().any(|tab| tab.active);
-                let tab_states: Vec<_> = tabs
-                    .iter()
-                    .map(|tab| (tab.tab_id, tab.active, tab.is_parked))
-                    .collect();
+                let missing_active = !tabs.is_empty() && !tabs.iter().any(|tab| tab.active);
+                let tab_states: Vec<_> = tabs.iter().map(|tab| (tab.tab_id, tab.active)).collect();
                 let active_tab = select_active_tab(
                     &tab_states,
                     self.active_tab_id,
                     self.active_tab_idx.saturating_sub(1),
                 );
-                let active_tab_idx = active_tab.map_or(0, |(index, _)| {
-                    tabs[..=index].iter().filter(|tab| !tab.is_parked).count()
-                });
+                let active_tab_idx = active_tab.map_or(0, |(index, _)| index + 1);
                 let active_tab_id = active_tab.map(|(_, tab_id)| tab_id);
                 // Keep rendering, labels, and navigation on the same fallback selection.
                 if let Some((index, _)) = active_tab {
@@ -201,42 +186,18 @@ impl<H: Host> ZellijPlugin for Tabbar<H> {
                 Mouse::LeftClick(row, _col) => {
                     self.mouse_press = self.get_action_at_row(row);
                     self.mouse_dragged = false;
-                    match self.mouse_press {
-                        Some(RowAction::ResumeTab { tab_id }) => {
-                            self.host.resume_tab(tab_id);
-                            self.mouse_press = None;
-                        }
-                        Some(RowAction::SwitchTab { .. }) => self.host.set_timeout(0.15),
-                        _ => {}
+                    if self.mouse_press.is_some() {
+                        self.host.set_timeout(0.15);
                     }
                 }
-                Mouse::Hold(row, _) => {
-                    let dropped_in_parked_section = matches!(
-                        self.get_action_at_row(row),
-                        Some(RowAction::ParkedHeader | RowAction::ResumeTab { .. })
-                    );
-                    if let Some(RowAction::SwitchTab { tab_id, .. }) = self.mouse_press
-                        && dropped_in_parked_section
-                    {
-                        self.host.park_tab(Some(tab_id));
-                        self.mouse_press = None;
-                    }
+                Mouse::Hold(_, _) => {
                     self.mouse_dragged = true;
                 }
                 Mouse::Release(row, _col) => {
                     let pressed = self.mouse_press.take();
                     let released = self.get_action_at_row(row);
-                    if self.mouse_dragged {
-                        let dropped_in_parked_section = matches!(
-                            released,
-                            Some(RowAction::ParkedHeader | RowAction::ResumeTab { .. })
-                        );
-                        if let Some(RowAction::SwitchTab { tab_id, .. }) = pressed
-                            && dropped_in_parked_section
-                        {
-                            self.host.park_tab(Some(tab_id));
-                        }
-                    } else if pressed == released
+                    if !self.mouse_dragged
+                        && pressed == released
                         && let Some(action) = released
                     {
                         self.activate_row(action);
@@ -467,13 +428,11 @@ impl<H: Host> Tabbar<H> {
                     self.host.switch_tab(target);
                 }
             }
-            RowAction::ResumeTab { tab_id } => self.host.resume_tab(tab_id),
-            RowAction::ParkedHeader => {}
         }
     }
 
     fn scroll(&mut self, forward: bool) {
-        let tabs: Vec<_> = self.tabs.iter().filter(|tab| !tab.is_parked).collect();
+        let tabs = &self.tabs;
         let Some(target) = scroll_target(self.active_tab_idx, tabs.len(), forward) else {
             return;
         };
@@ -504,8 +463,6 @@ mod tests {
         fn request_permissions(&mut self, _: &[PermissionType]) {}
         fn set_selectable(&mut self, _: bool) {}
         fn switch_tab(&mut self, _: u32) {}
-        fn park_tab(&mut self, _: Option<u64>) {}
-        fn resume_tab(&mut self, _: u64) {}
         fn render(&mut self, _: &str) {}
     }
 
@@ -523,8 +480,6 @@ mod tests {
             fn request_permissions(&mut self, _: &[PermissionType]) {}
             fn set_selectable(&mut self, _: bool) {}
             fn switch_tab(&mut self, _: u32) {}
-            fn park_tab(&mut self, _: Option<u64>) {}
-            fn resume_tab(&mut self, _: u64) {}
             fn render(&mut self, _: &str) {
                 panic!("zero rows must not emit a frame");
             }
@@ -532,7 +487,10 @@ mod tests {
         let mut state = Tabbar::<NoFrameHost> {
             tabs: vec![TabInfo::default()],
             permissions_granted: true,
-            row_actions: vec![Some(RowAction::ParkedHeader)],
+            row_actions: vec![Some(RowAction::SwitchTab {
+                tab_id: 20,
+                position: 1,
+            })],
             ..Tabbar::default()
         };
 
@@ -551,8 +509,7 @@ mod tests {
                     tab_id: 20,
                     position: 1,
                 }),
-                Some(RowAction::ResumeTab { tab_id: 30 }),
-                Some(RowAction::ParkedHeader),
+                None,
             ],
             ..State::default()
         };
@@ -565,11 +522,8 @@ mod tests {
                 position: 1,
             })
         );
-        assert_eq!(
-            state.get_action_at_row(2),
-            Some(RowAction::ResumeTab { tab_id: 30 })
-        );
-        assert_eq!(state.get_action_at_row(3), Some(RowAction::ParkedHeader));
+        assert_eq!(state.get_action_at_row(2), None);
+        assert_eq!(state.get_action_at_row(3), None);
         assert_eq!(state.get_action_at_row(4), None);
         assert_eq!(state.get_action_at_row(-1), None);
     }

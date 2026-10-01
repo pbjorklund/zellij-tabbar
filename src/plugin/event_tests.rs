@@ -6,8 +6,6 @@ use unicode_width::UnicodeWidthStr;
 struct RecordingHost {
     calls: Vec<&'static str>,
     switches: Vec<u32>,
-    parked: Vec<Option<u64>>,
-    resumed: Vec<u64>,
     frames: Vec<String>,
     logs: Vec<String>,
     timeouts: Vec<f64>,
@@ -48,12 +46,6 @@ impl Host for RecordingHost {
     fn switch_tab(&mut self, index: u32) {
         self.switches.push(index);
     }
-    fn park_tab(&mut self, tab_id: Option<u64>) {
-        self.parked.push(tab_id);
-    }
-    fn resume_tab(&mut self, tab_id: u64) {
-        self.resumed.push(tab_id);
-    }
     fn render(&mut self, frame: &str) {
         self.frames.push(frame.to_owned());
     }
@@ -74,13 +66,6 @@ fn tab(id: usize, position: usize, active: bool) -> TabInfo {
         active,
         name: format!("work-{id}"),
         ..TabInfo::default()
-    }
-}
-
-fn parked_tab(id: usize, position: usize) -> TabInfo {
-    TabInfo {
-        is_parked: true,
-        ..tab(id, position, false)
     }
 }
 
@@ -392,23 +377,6 @@ fn missing_active_marker_keeps_the_selected_tab_renderable_and_styled() {
 }
 
 #[test]
-fn active_fallback_ignores_a_parked_active_marker_and_previous_id() {
-    let mut state = state();
-    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(30, 1, false)]));
-    let mut parked_active = parked_tab(10, 0);
-    parked_active.active = true;
-
-    state.update(Event::TabUpdate(vec![parked_active, tab(30, 1, false)]));
-    state.render(3, 30);
-
-    assert_eq!(state.active_tab_id, Some(30));
-    assert_eq!(state.active_tab_idx, 1);
-    assert!(!state.tabs[0].active);
-    assert!(state.tabs[1].active);
-    assert!(state.host.frames.last().unwrap().contains("2:work-30 *"));
-}
-
-#[test]
 fn missing_own_pane_drops_stale_position_after_a_tab_closes() {
     let mut state = state();
     state.update(Event::PaneUpdate(manifest(1)));
@@ -531,7 +499,7 @@ fn empty_tabs_clear_click_targets_and_recover_on_next_snapshot() {
                 tab_id: 20,
                 position: 0,
             }),
-            Some(RowAction::ParkedHeader),
+            None,
         ]
     );
 }
@@ -566,6 +534,10 @@ fn rendering_keeps_activity_click_targets_and_reserves_primary_rows() {
                 position: 0,
             }),
             Some(RowAction::SwitchTab {
+                tab_id: 10,
+                position: 0,
+            }),
+            Some(RowAction::SwitchTab {
                 tab_id: 20,
                 position: 1,
             }),
@@ -573,7 +545,6 @@ fn rendering_keeps_activity_click_targets_and_reserves_primary_rows() {
                 tab_id: 30,
                 position: 2,
             }),
-            Some(RowAction::ParkedHeader),
         ]
     );
     click(&mut state, 2);
@@ -605,7 +576,7 @@ fn activity_controls_preserve_physical_rows_and_click_targets() {
                     tab_id: 10,
                     position: 0,
                 }),
-                Some(RowAction::ParkedHeader),
+                None,
             ]
         );
         click(&mut state, 1);
@@ -615,9 +586,9 @@ fn activity_controls_preserve_physical_rows_and_click_targets() {
 }
 
 #[test]
-fn parked_rows_keep_status_and_activity_while_regular_tabs_keep_activity() {
+fn background_tabs_keep_status_and_activity_while_active_tabs_keep_activity() {
     let mut state = state();
-    state.update(Event::TabUpdate(vec![tab(10, 0, true), parked_tab(20, 1)]));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(20, 1, false)]));
     state.pane_manifest.panes.insert(
         1,
         vec![PaneInfo {
@@ -649,11 +620,14 @@ fn parked_rows_keep_status_and_activity_while_regular_tabs_keep_activity() {
     assert!(frame.contains("build"));
     assert!(frame.contains("● work-20"));
     assert!(frame.contains("waiting"));
-    assert!(frame.contains("Parked"));
     assert_eq!(
-        state.row_actions[7],
-        Some(RowAction::ResumeTab { tab_id: 20 })
+        state.row_actions[3],
+        Some(RowAction::SwitchTab {
+            tab_id: 20,
+            position: 1
+        })
     );
+    assert!(state.row_actions[4..].iter().all(Option::is_none));
 }
 
 #[test]
@@ -696,7 +670,10 @@ fn overflow_rows_and_wheel_navigation_stay_in_bounds() {
                 tab_id: 26,
                 position: 6,
             }),
-            Some(RowAction::ParkedHeader),
+            Some(RowAction::SwitchTab {
+                tab_id: 27,
+                position: 7,
+            }),
         ]
     );
     click(&mut state, 0);
@@ -708,33 +685,18 @@ fn overflow_rows_and_wheel_navigation_stay_in_bounds() {
 }
 
 #[test]
-fn click_release_switches_or_resumes_and_drag_release_parks_the_pressed_stable_id() {
+fn click_release_switches_once_and_hold_does_not_activate_another_row() {
     let mut state = state();
-    state.update(Event::TabUpdate(vec![
-        tab(10, 0, true),
-        parked_tab(20, 1),
-        tab(30, 2, false),
-    ]));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(20, 1, false)]));
     state.render(6, 30);
-
+    click(&mut state, 1);
+    state.update(Event::Timer(0.15));
+    assert_eq!(state.host.switches, [2]);
     state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
-    assert!(state.host.switches.is_empty());
-    state.update(Event::Mouse(Mouse::Release(0, 0)));
-    assert_eq!(state.host.switches, [1]);
-
-    state.update(Event::Mouse(Mouse::LeftClick(5, 0)));
-    assert_eq!(state.host.resumed, [20]);
-    state.update(Event::Mouse(Mouse::Release(5, 0)));
-    assert_eq!(state.host.resumed, [20]);
-
-    state.update(Event::Mouse(Mouse::LeftClick(0, 0)));
-    state.update(Event::Mouse(Mouse::Hold(4, 0)));
-    state.tabs = vec![tab(30, 0, true), tab(10, 1, false), parked_tab(20, 2)];
-    state.active_tab_idx = 1;
-    state.render(6, 30);
-    state.update(Event::Mouse(Mouse::Release(4, 0)));
-
-    assert_eq!(state.host.parked, [Some(10)]);
+    state.update(Event::Mouse(Mouse::Hold(1, 0)));
+    state.update(Event::Timer(0.15));
+    state.update(Event::Mouse(Mouse::Release(1, 0)));
+    assert_eq!(state.host.switches, [2]);
 }
 
 #[test]
@@ -748,39 +710,6 @@ fn click_timer_switches_when_zellij_does_not_forward_mouse_release() {
     state.update(Event::Timer(0.15));
 
     assert_eq!(state.host.switches, [2]);
-}
-
-#[test]
-fn dropping_a_normal_tab_on_a_parked_row_parks_it() {
-    let mut state = state();
-    state.update(Event::TabUpdate(vec![
-        tab(10, 0, true),
-        tab(20, 1, false),
-        parked_tab(30, 2),
-    ]));
-    state.render(6, 30);
-
-    state.update(Event::Mouse(Mouse::LeftClick(1, 0)));
-    state.update(Event::Mouse(Mouse::Hold(5, 0)));
-    state.update(Event::Mouse(Mouse::Release(5, 0)));
-
-    assert_eq!(state.host.parked, [Some(20)]);
-}
-
-#[test]
-fn wheel_navigation_skips_parked_tabs() {
-    let mut state = state();
-    state.update(Event::TabUpdate(vec![
-        tab(10, 0, true),
-        parked_tab(20, 1),
-        tab(30, 2, false),
-    ]));
-
-    state.update(Event::Mouse(Mouse::ScrollDown(1)));
-    state.active_tab_idx = 2;
-    state.update(Event::Mouse(Mouse::ScrollUp(1)));
-
-    assert_eq!(state.host.switches, [3, 1]);
 }
 
 fn click(state: &mut State, row: isize) {
@@ -802,7 +731,7 @@ fn compiled_configuration_preserves_aliases_and_explicit_variable_widths() {
     state.render(2, 10);
     assert_eq!(
         state.host.frames.last().unwrap(),
-        "0:pr...  |\x1b[m\nParked   |\x1b[m"
+        "0:pr...  |\x1b[m\n         |\x1b[m"
     );
 }
 

@@ -216,63 +216,9 @@ impl RenderContext<'_> {
     }
 
     pub(super) fn render(&self, rows: usize, cols: usize) -> Frame {
-        let tabs: Vec<_> = self.tabs.iter().filter(|tab| !tab.is_parked).collect();
-        let parked_tabs: Vec<_> = self.tabs.iter().filter(|tab| tab.is_parked).collect();
-        let has_parked_header = rows >= 2;
+        let tabs = self.tabs;
         let rows_kept_for_tabs = usize::from(!tabs.is_empty());
-        let parked_capacity = if has_parked_header {
-            rows.saturating_sub(1 + rows_kept_for_tabs)
-        } else {
-            0
-        };
-        let parked_overflows = parked_tabs.len() > parked_capacity;
-        let visible_parked_count = if parked_overflows {
-            parked_capacity.saturating_sub(1)
-        } else {
-            parked_tabs.len()
-        };
-        let mut parked_lines = Vec::with_capacity(parked_capacity);
-        let mut parked_actions = Vec::with_capacity(parked_capacity);
-        for (index, tab) in parked_tabs.iter().take(visible_parked_count).enumerate() {
-            let styled = self.expand_tmux_format(
-                &self.style.format,
-                tab,
-                tab.position.saturating_add(self.style.start_index),
-            );
-            let action = resume_action(tab);
-            parked_lines.push(build_line(&styled, &self.style.border, cols, false));
-            parked_actions.push(action);
-
-            let primary_rows_remaining =
-                visible_parked_count.saturating_sub(index + 1) + usize::from(parked_overflows);
-            let remaining_for_activity =
-                parked_capacity.saturating_sub(parked_lines.len() + primary_rows_remaining);
-            if let Some(activity) = self.activity_for_tab(tab) {
-                for activity_row in
-                    activity::render_activity_limited(activity, cols, remaining_for_activity)
-                {
-                    let rendered = self
-                        .style
-                        .activity_format
-                        .replace("{activity}", &activity_row);
-                    let styled = parse_styled_string(&rendered);
-                    parked_lines.push(build_line(&styled, &self.style.border, cols, false));
-                    parked_actions.push(action);
-                }
-            }
-        }
-        if parked_overflows && parked_capacity > 0 {
-            let hidden = parked_tabs.len().saturating_sub(visible_parked_count);
-            let indicator_text = self.expand_overflow_format(&self.style.overflow_below, hidden);
-            let styled = parse_styled_string(&indicator_text);
-            parked_lines.push(build_line(&styled, &self.style.border, cols, false));
-            parked_actions.push(
-                parked_tabs
-                    .get(visible_parked_count)
-                    .and_then(|tab| resume_action(tab)),
-            );
-        }
-        let tab_rows = rows.saturating_sub(parked_lines.len() + usize::from(has_parked_header));
+        let tab_rows = rows;
 
         let top_padding = self
             .style
@@ -306,7 +252,7 @@ impl RenderContext<'_> {
             lines.push(build_line(&styled, &self.style.border, cols, false));
             row_actions.push(
                 tabs.get(visible.start.saturating_sub(1))
-                    .and_then(|tab| switch_action(tab)),
+                    .and_then(switch_action),
             );
         }
 
@@ -355,26 +301,13 @@ impl RenderContext<'_> {
                 self.expand_overflow_format(&self.style.overflow_below, visible.below);
             let styled = parse_styled_string(&indicator_text);
             lines.push(build_line(&styled, &self.style.border, cols, false));
-            row_actions.push(tabs.get(visible.end).and_then(|tab| switch_action(tab)));
+            row_actions.push(tabs.get(visible.end).and_then(switch_action));
         }
 
         while lines.len() < tab_rows {
             lines.push(build_empty_line(&self.style.border, cols));
             row_actions.push(None);
         }
-
-        if has_parked_header {
-            lines.push(build_line(
-                &self.style.parked_header,
-                &self.style.border,
-                cols,
-                false,
-            ));
-            row_actions.push(Some(RowAction::ParkedHeader));
-        }
-
-        lines.extend(parked_lines);
-        row_actions.extend(parked_actions);
 
         let text = if lines.is_empty() {
             None
@@ -394,12 +327,6 @@ fn switch_action(tab: &TabInfo) -> Option<RowAction> {
     })
 }
 
-fn resume_action(tab: &TabInfo) -> Option<RowAction> {
-    Some(RowAction::ResumeTab {
-        tab_id: u64::try_from(tab.tab_id).ok()?,
-    })
-}
-
 fn norm_session_name(s: &str) -> &str {
     let t = s.trim_start();
     if let Some(first) = t.chars().next()
@@ -415,12 +342,11 @@ mod tests {
     use super::*;
     use crate::plugin::RowAction;
 
-    fn tab(id: usize, position: usize, active: bool, is_parked: bool) -> TabInfo {
+    fn tab(id: usize, position: usize, active: bool) -> TabInfo {
         TabInfo {
             tab_id: id,
             position,
             active,
-            is_parked,
             name: format!("tab-{id}"),
             ..TabInfo::default()
         }
@@ -454,66 +380,19 @@ mod tests {
     }
 
     #[test]
-    fn parked_header_and_tabs_are_anchored_to_the_bottom() {
-        let tabs = [tab(10, 0, true, false), tab(20, 1, false, true)];
-
+    fn rows_after_tabs_are_empty_and_have_no_click_target() {
+        let tabs = [tab(10, 0, true), tab(20, 1, false)];
         let frame = render(&tabs, 6);
-
         assert_eq!(
             plain_lines(&frame),
-            ["1:tab-10 *", "", "", "", "Parked", "2:tab-20"]
+            ["1:tab-10 *", "2:tab-20", "", "", "", ""]
         );
-        assert_eq!(
-            frame.row_actions,
-            [
-                Some(RowAction::SwitchTab {
-                    tab_id: 10,
-                    position: 0,
-                }),
-                None,
-                None,
-                None,
-                Some(RowAction::ParkedHeader),
-                Some(RowAction::ResumeTab { tab_id: 20 }),
-            ]
-        );
+        assert!(frame.row_actions[2..].iter().all(Option::is_none));
     }
 
     #[test]
-    fn parked_rows_overflow_without_hiding_the_active_row_or_header() {
-        let tabs = [
-            tab(10, 0, true, false),
-            tab(20, 1, false, true),
-            tab(30, 2, false, true),
-            tab(40, 3, false, true),
-            tab(50, 4, false, true),
-        ];
-
-        let frame = render(&tabs, 4);
-
-        assert_eq!(
-            plain_lines(&frame),
-            ["1:tab-10 *", "Parked", "2:tab-20", "  v +3"]
-        );
-        assert_eq!(
-            frame.row_actions[3],
-            Some(RowAction::ResumeTab { tab_id: 30 })
-        );
-    }
-
-    #[test]
-    fn two_rows_keep_the_active_row_and_parked_drop_header_available() {
-        let tabs = [tab(10, 0, true, false), tab(20, 1, false, true)];
-
-        let frame = render(&tabs, 2);
-
-        assert_eq!(plain_lines(&frame), ["1:tab-10 *", "Parked"]);
-        assert_eq!(frame.row_actions[1], Some(RowAction::ParkedHeader));
-    }
-
-    #[test]
-    fn top_padding_does_not_hide_the_only_unparked_row() {
-        let tabs = [tab(10, 0, true, false), tab(20, 1, false, true)];
+    fn top_padding_does_not_hide_the_only_tab_row() {
+        let tabs = [tab(10, 0, true)];
         let style = StyleConfig {
             padding_top: 1,
             ..StyleConfig::default()
@@ -532,9 +411,9 @@ mod tests {
         }
         .render(2, 24);
 
-        assert_eq!(plain_lines(&frame), ["1:tab-10 *", "Parked"]);
+        assert_eq!(plain_lines(&frame), ["", "1:tab-10 *"]);
         assert_eq!(
-            frame.row_actions[0],
+            frame.row_actions[1],
             Some(RowAction::SwitchTab {
                 tab_id: 10,
                 position: 0,

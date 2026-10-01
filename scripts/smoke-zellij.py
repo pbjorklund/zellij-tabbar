@@ -49,13 +49,6 @@ def sidebar_matches(lines, expected, absent=()):
             and not any(name in "\n".join(sidebar) for name in absent))
 
 
-def sidebar_bottom_matches(lines, expected, absent=()):
-    """Match labels anchored to the bottom of the sidebar."""
-    sidebar = [line[:SIDEBAR_WIDTH] for line in lines]
-    return (sidebar_rows_match(sidebar[-len(expected):], expected) if expected else True) \
-        and not any(name in "\n".join(sidebar) for name in absent)
-
-
 class Screen:
     """Small VT viewport oracle, not a general terminal emulator."""
 
@@ -205,7 +198,6 @@ on_force_close "quit"
 keybinds clear-defaults=true {
     normal {
         bind "Ctrl p" { MoveFocus "Left"; }
-        bind "Ctrl o" { ParkTab; }
     }
 }
 ''', encoding="utf-8")
@@ -306,15 +298,13 @@ keybinds clear-defaults=true {
         if self.process.poll() is not None:
             raise RuntimeError(f"Zellij exited: {self.process.returncode}")
 
-    def expect_labels(self, expected, active, label, bottom=(), absent=()):
+    def expect_labels(self, expected, active, label, absent=()):
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             self.pump()
             lines = self.screen.lines()
-            if (sidebar_matches(lines, expected, absent)
-                    and sidebar_bottom_matches(lines, bottom, absent)):
-                rendered = expected + list(bottom)
-                print(f"PASS {label}: " + ", ".join(rendered), flush=True)
+            if sidebar_matches(lines, expected, absent):
+                print(f"PASS {label}: " + ", ".join(expected), flush=True)
                 return
             text = "\n".join(lines).lower()
             if "permission" in "".join(text.split()) and ("[y]" in text or "(y)" in text or "(y/n)" in text):
@@ -330,23 +320,12 @@ keybinds clear-defaults=true {
                             self.granted_panes.add(pane_id)
                             break
                         self.pump()
-        wanted = expected + list(bottom)
-        raise RuntimeError(f"timed out waiting for {label}; expected {wanted}\n" + "\n".join(self.screen.lines()))
+        raise RuntimeError(f"timed out waiting for {label}; expected {expected}\n" + "\n".join(self.screen.lines()))
 
     def expect(self, names, active, label, absent=()):
         expected = [f"{self.prefix}-{'A' if name == active else 'I'}{i}:{name}"
                     for i, name in enumerate(names, 1)]
         self.expect_labels(expected, active, label, absent=absent)
-
-    def expect_parked(self, normal_tabs, active, parked_tabs, label,
-                      overflow=None, absent=()):
-        normal = [f"{self.prefix}-{'A' if name == active else 'I'}{index}:{name}"
-                  for index, name in normal_tabs]
-        parked = ["Parked"] + [f"{self.prefix}-I{index}:{name}"
-                                for index, name in parked_tabs]
-        if overflow is not None:
-            parked.append(overflow)
-        self.expect_labels(normal, active, label, bottom=parked, absent=absent)
 
     def expect_animation(self, names, active, target):
         frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -387,25 +366,9 @@ keybinds clear-defaults=true {
         y = row + 1
         os.write(self.master, f"\x1b[<0;3;{y}M\x1b[<0;3;{y}m".encode())
 
-    def drag_sidebar(self, start_row, end_row):
-        start_y, end_y = start_row + 1, end_row + 1
-        os.write(self.master, f"\x1b[<0;3;{start_y}M".encode())
-        time.sleep(0.04)
-        os.write(self.master, f"\x1b[<32;3;{end_y}M".encode())
-        time.sleep(0.04)
-        os.write(self.master, f"\x1b[<0;3;{end_y}m".encode())
-
-    def expect_file_growth(self, path, previous_size, label):
-        deadline = time.monotonic() + self.timeout
-        while time.monotonic() < deadline:
-            self.pump()
-            try:
-                if path.stat().st_size > previous_size:
-                    print(f"PASS {label}", flush=True)
-                    return
-            except FileNotFoundError:
-                pass
-        raise RuntimeError(f"timed out waiting for {label}")
+    def wheel_sidebar(self, forward):
+        button = 65 if forward else 64
+        os.write(self.master, f"\x1b[<{button};3;1M".encode())
 
     def close(self):
         try:
@@ -450,34 +413,14 @@ keybinds clear-defaults=true {
             self.cli("action", "go-to-tab", str(index))
             self.expect(["alpha", "beta", "gamma"], name, f"approve {name} instance")
 
-        # Park the output-producing tab through the configured key, then prove
-        # its process keeps producing output while Zellij hides the tab.
-        self.cli("action", "go-to-tab", "2")
-        self.expect(["alpha", "beta", "gamma"], "beta", "prime park fallback")
-        self.cli("action", "go-to-tab", "1")
-        self.expect(["alpha", "beta", "gamma"], "alpha", "focus live tab to park")
-        os.write(self.master, b"\x0f")
-        self.expect_parked(
-            [(2, "beta"), (3, "gamma")], "beta", [(1, "alpha")],
-            "park live tab with Ctrl o",
+        self.expect_labels(
+            [f"{self.prefix}-A1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-I3:gamma"]
+            + [""] * 21, "alpha", "all remaining sidebar rows are empty",
         )
-        heartbeat_size = self.heartbeat.stat().st_size
-        self.expect_file_growth(
-            self.heartbeat, heartbeat_size, "parked tab keeps producing output"
-        )
-        self.click_sidebar(23)
-        self.expect(["alpha", "beta", "gamma"], "alpha", "click parked row to resume")
-
-        # Drag a normal tab to the empty, bottom-anchored Parked header.
-        self.drag_sidebar(1, 23)
-        self.expect_parked(
-            [(1, "alpha"), (3, "gamma")], "alpha", [(2, "beta")],
-            "drag normal row to Parked header",
-        )
-        self.click_sidebar(23)
-        self.expect(["alpha", "beta", "gamma"], "beta", "resume dragged tab")
-        self.cli("action", "go-to-tab", "1")
-        self.expect(["alpha", "beta", "gamma"], "alpha", "return after parked checks")
+        self.wheel_sidebar(True)
+        self.expect(["alpha", "beta", "gamma"], "beta", "wheel forward")
+        self.wheel_sidebar(False)
+        self.expect(["alpha", "beta", "gamma"], "alpha", "wheel back")
 
         alpha_pane = self.pane_for_tab("alpha")
         self.status(alpha_pane, "working", 1)
@@ -514,10 +457,7 @@ keybinds clear-defaults=true {
         self.expect(["alpha", "small"], "alpha", "click first sidebar row")
         time.sleep(0.2)
 
-        added_names = [
-            "normal-three", "normal-four", "park-one", "park-two",
-            "park-three", "park-four", "park-five",
-        ]
+        added_names = [f"overflow-{i}" for i in range(3, 10)]
         all_names = ["alpha", "small"]
         for name in added_names:
             created_tab_id = self.cli(
@@ -534,20 +474,19 @@ keybinds clear-defaults=true {
             self.cli("action", "go-to-tab-name", name)
             self.expect(all_names, name, f"approve overflow tab {name}")
 
-        normal_tabs = list(enumerate(all_names[:4], 1))
-        parked_tabs = list(enumerate(all_names[4:], 5))
-        for _, name in parked_tabs:
-            self.cli("action", "go-to-tab-name", name)
-            self.cli("action", "park-tab")
         self.cli("action", "go-to-tab-name", "alpha")
-        self.expect_parked(
-            normal_tabs, "alpha", parked_tabs, "prepare constrained overflow"
-        )
         self.resize(6, 70)
-        self.expect_parked(
-            [(1, "alpha")], "alpha", parked_tabs[:3],
-            "constrained normal+parked overflow", overflow="  v +2",
-            absent=("small", "normal-three", "normal-four", "park-four", "park-five"),
+        self.expect_labels(
+            [f"{self.prefix}-A1:alpha", f"{self.prefix}-I2:small"]
+            + [f"{self.prefix}-I{i}:overflow-{i}" for i in range(3, 5)]
+            + ["  v +5", ""], "alpha", "constrained overflow below",
+            absent=("overflow-5", "overflow-6", "overflow-7", "overflow-8", "overflow-9"),
+        )
+        self.click_sidebar(4)
+        self.expect_labels(
+            ["  ^ +2"] + [f"{self.prefix}-{'A' if i == 5 else 'I'}{i}:overflow-{i}"
+                           for i in range(3, 7)] + ["  v +3"],
+            "overflow-5", "overflow click reveals next hidden tab",
         )
 
         log_text = "\n".join(path.read_text(errors="replace") for path in self.root.rglob("*.log"))
@@ -577,8 +516,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--zellij", type=Path,
-        default=Path(__file__).resolve().parents[2] / "zellij/target/release/zellij",
-        help="parked-tab fork binary (default: sibling zellij release build)",
+        default=Path("zellij"),
+        help="upstream Zellij executable (default: zellij on PATH)",
     )
     parser.add_argument("--wasm", type=Path, default=Path(__file__).resolve().parents[1] / "target/wasm32-wasip1/release/zellij-tabbar.wasm")
     parser.add_argument("--timeout", type=float, default=20, help="seconds per bounded action/assertion")
@@ -587,7 +526,7 @@ def main():
     if (not binary.is_file() or not os.access(binary, os.X_OK)
             or not args.wasm.is_file() or not math.isfinite(args.timeout)
             or args.timeout <= 0):
-        parser.error("need an executable parked-tab Zellij fork, an existing WASM, and a positive timeout")
+        parser.error("need an executable Zellij, an existing WASM, and a positive timeout")
     wasm = args.wasm.resolve()
     print(
         f"ZELLIJ {binary}\nWASM {wasm}\n"
@@ -611,7 +550,7 @@ def main():
                 failed = True
         if failed:
             return 1
-    print("PASS live PTY rendering, parked tabs, constrained overflow, and mouse clicks; Unicode and activity rows covered only by host tests")
+    print("PASS live PTY rendering, constrained overflow, mouse clicks and wheel navigation; Unicode and activity rows covered by host tests")
     return 0
 
 

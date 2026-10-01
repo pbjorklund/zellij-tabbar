@@ -6,9 +6,9 @@ This project is based on [cfal/zellij-vertical-tabs](https://github.com/cfal/zel
 
 ## Use it without pi
 
-Install the sidebar and load its layout. Explicit tab names stay unchanged. For default names, the current source build displays the focused terminal pane's directory name and updates it after `cd`, pane focus changes, and worktree entry. It uses upstream Zellij's cwd metadata, not Bash naming hooks. If cwd is unavailable, it falls back to the pane title.
+Install the sidebar and load its layout. Explicit tab names stay unchanged. For default names, v0.4.0 displays the focused terminal pane's directory name and updates it after `cd`, pane focus changes, and worktree entry. It uses upstream Zellij's cwd metadata, not Bash naming hooks. If cwd is unavailable, it falls back to the pane title.
 
-Directory labels do not infer a Git branch or repository name. A worktree at `/projects/app-feature` appears as `app-feature`; `/` appears as `/`. These cwd labels are not in the published v0.3.0 WASM, which falls back to pane titles.
+Directory labels do not infer a Git branch or repository name. A worktree at `/projects/app-feature` appears as `app-feature`; `/` appears as `/`.
 
 ```text
 1:editor*
@@ -16,7 +16,7 @@ Directory labels do not infer a Git branch or repository name. A worktree at `/p
 3:logs
 ```
 
-Click a row to switch tabs, or scroll over the sidebar to move one unparked tab at a time. Drag a tab row onto the bottom-anchored `Parked` header to park it; click a parked row to resume it. Overflow indicators show how many tabs are hidden. Labels, colors, borders, and width limits are configurable. Existing Zellij keyboard bindings still work.
+Click a row to switch tabs, or scroll over the sidebar to move one tab at a time. Overflow indicators show how many tabs are hidden. Labels, colors, borders, and width limits are configurable. Existing Zellij keyboard bindings still work.
 
 You can also run pi in these tabs without installing anything else. The sidebar will show ordinary tab names, but it will not detect when pi starts or finishes work.
 
@@ -52,16 +52,16 @@ The sidebar still works without pi. The companion extension now requires this si
 
 ## Install the sidebar
 
-Zellij is the only runtime requirement for standalone use. Hook-free naming is tested with upstream Zellij 0.45.1. The checkout currently builds against its pinned `zellij-tile` 0.46.0 fork; parked-tab behavior requires that fork. The separate upstream naming test does not use parked actions.
+Use upstream Zellij 0.45.1 or newer. The plugin builds against the crates.io `zellij-tile` 0.45.1 API and is tested with package-managed Zellij 0.45.1.
 
-Download [v0.3.0](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.3.0), verify its checksum, and install the WASM:
+Download [v0.4.0](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.4.0), verify its checksum, and install the WASM:
 
 ```sh
 (
   set -eu
   download_dir=$(mktemp -d)
   cd "$download_dir"
-  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.3.0
+  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.4.0
   curl -fLO "$release/zellij-tabbar.wasm"
   curl -fLO "$release/SHA256SUMS"
   sha256sum --check SHA256SUMS
@@ -136,7 +136,6 @@ pane size=32 borderless=true {
         border "#[fg=dim]│"
         overflow_above "  ^ +{count}"
         overflow_below "  v +{count}"
-        parked_header "#[fg=dim,bold]Parked"
     }
 }
 ```
@@ -150,8 +149,7 @@ pane size=32 borderless=true {
 | `padding_top` | `0` | Empty rows above the list |
 | `border` | empty | Right border text; `border_char` is a fallback alias |
 | `overflow_above` | `  ^ +{count}` | Hidden-tab count above the viewport |
-| `overflow_below` | `  v +{count}` | Hidden-tab count below the viewport, including the constrained parked section |
-| `parked_header` | `Parked` | Styled label and drag target above parked tabs |
+| `overflow_below` | `  v +{count}` | Hidden-tab count below the viewport |
 | `indicator_active` | `*` | Active-tab marker |
 | `indicator_fullscreen` | `Z` | Fullscreen marker |
 | `indicator_sync` | `S` | Synchronized-panes marker |
@@ -162,7 +160,7 @@ Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `
 
 Inline styles use `#[fg=...,bg=...,bold,dim,fill]`. Colors can be names, 8-bit indices, `#RGB`, `#RRGGBB`, or `rgb(r,g,b)`. `fill` extends the active row's background through its padding, but not its border. Raw terminal control characters in labels and activity text become spaces so each item stays on one row.
 
-When tabs overflow, the sidebar keeps the active unparked tab in view when there is room for tab rows. Click an overflow row to move toward hidden tabs; a parked overflow row resumes the next hidden parked tab. At two or more rows, the `Parked` header stays available as a drop target at the bottom, and parked rows use only the remaining height after keeping an unparked row. Activity rows link to their parent tab, parked rows keep status markers, and empty rows do not switch tabs. Existing Zellij keyboard bindings are unchanged.
+When tabs overflow, the sidebar keeps the active tab in view when there is room for tab rows. Click an overflow row to move toward hidden tabs. Activity rows link to their parent tab, and empty rows do not switch tabs. Existing Zellij keyboard bindings are unchanged.
 
 ## Activity rows
 
@@ -259,9 +257,9 @@ For hook-free naming against upstream Zellij, run:
 python3 scripts/smoke-naming.py --zellij /usr/bin/zellij
 ```
 
-This separate disposable test starts Bash with profiles and rc files disabled, checks directory/worktree labels, pane focus/movement, explicit names and tab movement, and verifies cleanup. It does not test parked tabs or install the built WASM.
+This separate disposable test starts Bash with profiles and rc files disabled, checks directory/worktree labels, pane focus/movement, explicit names and tab movement, and verifies cleanup. It does not install the built WASM.
 
-The full smoke test requires the parked-tab fork; native Zellij 0.45.1 lacks ParkTab.
+Both live tests use upstream `zellij` from PATH by default; use `--zellij <path>` to select an upstream executable.
 
 The smoke test creates its own disposable PTY session and checks local status animation, completion clearing, tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar protocol, not the companion pi extension or an intermittent hang in an existing session.
 

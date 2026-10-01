@@ -21,7 +21,7 @@
 
 ## Build and validation
 
-Use Cargo from the repository root. The root package uses Rust edition 2024 and requires Rust 1.88 or newer; `activity` uses edition 2021. `zellij-tile` is pinned to `=0.44.3`.
+Use Cargo from the repository root. The root package uses Rust edition 2024 and requires Rust 1.88 or newer; `activity` uses edition 2021. `zellij-tile` is pinned to the crates.io upstream API `=0.45.1`.
 
 Install the WASI target if missing:
 
@@ -42,14 +42,14 @@ cargo build --locked --release --target wasm32-wasip1
 
 Start with a focused library test, such as `cargo test --locked --lib plugin::event_tests` or `cargo test --locked -p activity --lib`. The library suite includes the plugin callbacks and renderer through a recording host, without WASM linker stubs. Use `cargo bench --locked --bench plugin` for performance comparisons; keep timing thresholds out of unit tests.
 
-The plugin artifact is `target/wasm32-wasip1/release/zellij-tabbar.wasm`. It runs inside Zellij, not through host `cargo run`. For UI or event changes, run `python3 scripts/smoke-zellij.py` after the WASI build (tested with Zellij 0.45.0). It checks output and mouse clicks in its own disposable session without changing the installed plugin. Keep existing user sessions intact during diagnosis. Check overflow, wheel navigation, Unicode labels, and affected activity rows separately when relevant; report manual and automated checks separately.
+The plugin artifact is `target/wasm32-wasip1/release/zellij-tabbar.wasm`. It runs inside Zellij, not through host `cargo run`. For UI or event changes, run `python3 scripts/smoke-zellij.py` after the WASI build (tested with upstream Zellij 0.45.1). It checks output and mouse clicks in its own disposable session without changing the installed plugin. Keep existing user sessions intact during diagnosis. Check overflow, wheel navigation, Unicode labels, and affected activity rows separately when relevant; report manual and automated checks separately.
 
 ## Change rules
 
 - Keep Zellij API calls in `ZellijHost` and exercise `Tabbar` through a recording host in tests. Test callback sequences as well as isolated helpers.
 - Compile static label formats and borders during configuration, then reuse them during rendering. Replay queued permission events in FIFO order without repeatedly shifting the queue.
 - Use terminal display widths, not byte lengths, for sidebar sizing. Preserve ANSI resets, active-row fill, and border placement. The activity crate currently truncates by character count; do not assume it uses the sidebar's display-width logic.
-- Keep `row_targets` aligned with the rows actually rendered. Activity rows target their parent tab; padding and empty rows have no target. Runtime clicks use this map, not the standalone `tab_target_at_row` helper.
+- Keep `row_actions` aligned with the rows actually rendered. Activity rows target their parent tab; padding and empty rows have no target. Runtime clicks use this map, not the standalone `tab_target_at_row` helper.
 - Keep tab IDs, tab positions, zero-based vector indices, and one-based navigation targets distinct. `start_index` changes displayed labels, not navigation targets.
 - Keep the effective active tab consistent across render gating, labels, and navigation when an update lacks an active marker. Clear cached own-tab position when the pane manifest omits the plugin, so the unknown-location fallback can refresh the sidebar.
 - Test tab movement and closure with both pane/tab event orders and with stable tab IDs different from positions. A complete snapshot pair normally repairs ordering differences; distinguish reproduced edge cases from a confirmed live hang.

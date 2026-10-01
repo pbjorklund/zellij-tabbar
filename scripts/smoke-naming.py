@@ -38,8 +38,6 @@ def run(binary, wasm, root):
         if key in ("BASH_ENV", "ENV", "PROMPT_COMMAND", "PS0") or key.startswith("BASH_FUNC_"):
             smoke.env.pop(key)
     smoke.env["PS1"] = "clean> "
-    config = fixture / "config/zellij/config.kdl"
-    config.write_text(config.read_text().replace('        bind "Ctrl o" { ParkTab; }\n', ""))
     smoke.layout.write_text('''layout {
     tab focus=true {
         pane split_direction="vertical" {

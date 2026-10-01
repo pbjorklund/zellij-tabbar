@@ -26,7 +26,8 @@ class NamingFixtureTests(unittest.TestCase):
             self.assertTrue(all(key not in smoke.env for key in hooks))
             self.assertEqual(smoke.env["PS1"], "clean> ")
             self.assertIn('args "--noprofile" "--norc"', smoke.layout.read_text())
-            self.assertNotIn("ParkTab", (Path(directory) / "session/config/zellij/config.kdl").read_text())
+            self.assertIn('bind "Ctrl p" { MoveFocus "Left"; }',
+                          (Path(directory) / "session/config/zellij/config.kdl").read_text())
             close.assert_called_once_with(smoke)
             self.assertEqual(commands.call_count, 3)
             self.assertEqual(commands.call_args_list[-1].args[0][3:5], ["worktree", "add"])
