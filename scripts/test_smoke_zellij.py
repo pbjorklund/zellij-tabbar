@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -104,6 +105,96 @@ class ExpectTests(unittest.TestCase):
         self.expect(HEALTHY, absent=("adjacent pane",))
         with self.assertRaisesRegex(RuntimeError, "timed out"):
             self.expect(HEALTHY + ["stale-name                           |"], absent=("stale-name",))
+
+
+class WatcherTests(unittest.TestCase):
+    harness = ExpectTests.harness
+
+    @staticmethod
+    def rows(label):
+        return [f"{label:<36}|", *HEALTHY[1:]]
+
+    def test_idle_prefix_is_exact_and_before_name(self):
+        expected = ["SBtest-A1:CIRS alpha", *EXPECTED[1:]]
+        self.assertTrue(smoke_zellij.sidebar_matches(self.rows(expected[0]), expected))
+        for label in (
+            "SBtest-A1:alpha CIRS", "SBtest-A1:CIPRS alpha",
+            "SBtest-A1:SIRC alpha", "SBtest-A1:CIRSalpha",
+            "SBtest-A1:CIRS alpha-wrong",
+        ):
+            with self.subTest(label=label):
+                self.assertFalse(smoke_zellij.sidebar_matches(self.rows(label), expected))
+
+    def test_expect_idle_watchers_builds_prefix(self):
+        harness = self.harness(self.rows("SBtest-A1:CIRS alpha"))
+        with mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            harness.expect(["alpha", "beta", "gamma"], "alpha", "idle", watchers={"alpha": "CIRS"})
+
+    def test_animation_requires_changing_frames_after_prefix(self):
+        harness = self.harness([])
+        harness.screen.lines.side_effect = [
+            self.rows("SBtest-A1:CIRS⠋ alpha"),
+            self.rows("SBtest-A1:CIRS⠙ alpha"),
+        ]
+        with mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0, 0]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            harness.expect_animation(["alpha", "beta", "gamma"], "alpha", "alpha", watchers="CIRS")
+
+    def test_animation_rejects_suffix_or_unchanging_frame(self):
+        for label in ("SBtest-A1:⠋ alpha CIRS", "SBtest-A1:CIRS ⠋ alpha", "SBtest-A1:CIRS⠋ alpha"):
+            harness = self.harness(self.rows(label))
+            with self.subTest(label=label), \
+                 mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0, 0, 2]):
+                with self.assertRaisesRegex(RuntimeError, "timed out waiting for local status animation"):
+                    harness.expect_animation(["alpha", "beta", "gamma"], "alpha", "alpha", watchers="CIRS")
+
+    def test_done_prefix_precedes_marker_and_view_keeps_watchers(self):
+        done_rows = self.rows("SBtest-I1:CIRS● alpha")
+        done_rows[1] = f"{'SBtest-A2:beta':<36}|"
+        harness = self.harness(done_rows)
+        with mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            harness.expect(["CIRS● alpha", "beta", "gamma"], "beta", "done")
+        wrong_order = done_rows.copy()
+        wrong_order[0] = f"{'SBtest-I1:● CIRS alpha':<36}|"
+        self.assertFalse(smoke_zellij.sidebar_matches(
+            wrong_order, ["SBtest-I1:CIRS● alpha", "SBtest-A2:beta", EXPECTED[2]]
+        ))
+        harness.screen.lines.side_effect = [self.rows("SBtest-A1:CIRS alpha")]
+        with mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            harness.expect(["alpha", "beta", "gamma"], "alpha", "view", watchers={"alpha": "CIRS"})
+
+    def test_cleared_watchers_reject_stale_prefix(self):
+        for label in ("SBtest-A1:CIRS alpha", "SBtest-A1:I alpha"):
+            harness = self.harness(self.rows(label))
+            with self.subTest(label=label), \
+                 mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0, 2]):
+                with self.assertRaisesRegex(RuntimeError, "timed out waiting for cleared"):
+                    harness.expect(["alpha", "beta", "gamma"], "alpha", "cleared")
+        harness = self.harness(HEALTHY)
+        with mock.patch.object(smoke_zellij.time, "monotonic", side_effect=[0, 0]), \
+             contextlib.redirect_stdout(io.StringIO()):
+            harness.expect(["alpha", "beta", "gamma"], "alpha", "cleared")
+
+    def test_status_preserves_optional_wire_watchers_and_remove_identity(self):
+        harness = self.harness([])
+        harness.cli = mock.Mock()
+        for watchers in (None, "", "CIPRS"):
+            with self.subTest(watchers=watchers):
+                harness.status(7, "base", 2, watchers=watchers)
+                action = harness.cli.call_args.args
+                self.assertEqual(action[:4], ("pipe", "--name", "pi_status", "--"))
+                expected = {"v": 1, "kind": "snapshot", "runtime_id": "smoke",
+                            "seq": 2, "pane_id": 7, "mode": "base"}
+                if watchers is not None:
+                    expected["watchers"] = watchers
+                self.assertEqual(json.loads(action[4]), expected)
+        harness.status(7, "remove", 3)
+        self.assertEqual(json.loads(harness.cli.call_args.args[4]), {
+            "v": 1, "kind": "remove", "runtime_id": "smoke", "seq": 3, "pane_id": 7,
+        })
 
 
 class CleanupTests(unittest.TestCase):

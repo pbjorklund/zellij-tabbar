@@ -602,7 +602,7 @@ fn background_tabs_keep_status_and_activity_while_active_tabs_keep_activity() {
             runtime_id: "run".into(),
             seq: 1,
             mode: AgentMode::Done,
-            watchers: String::new(),
+            watchers: "CIPRS".into(),
         },
     );
     state.pipe(message(
@@ -618,7 +618,7 @@ fn background_tabs_keep_status_and_activity_while_active_tabs_keep_activity() {
 
     let frame = state.host.frames.last().unwrap();
     assert!(frame.contains("build"));
-    assert!(frame.contains("● work-20"));
+    assert!(frame.contains("CIRS● work-20"));
     assert!(frame.contains("waiting"));
     assert_eq!(
         state.row_actions[3],
@@ -901,7 +901,7 @@ fn pi_status_pipe_animates_in_the_visible_sidebar_without_renaming_tabs() {
 }
 
 #[test]
-fn watcher_suffix_survives_truncation_and_tracks_the_owning_pane() {
+fn watcher_prefix_survives_truncation_and_tracks_the_owning_pane() {
     let mut state = state();
     state.style.max_name_length = 8;
     state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(20, 1, false)]));
@@ -921,7 +921,7 @@ fn watcher_suffix_survives_truncation_and_tracks_the_owning_pane() {
     )));
     state.render(3, 30);
     let frame = state.host.frames.last().unwrap().replace("\x1b[m", "");
-    assert!(frame.contains("2:⠋ CIPRS"), "{frame:?}");
+    assert!(frame.contains("2:CIRS⠋ .."), "{frame:?}");
     assert!(frame.contains("1:work-10 *"), "{frame:?}");
     assert_eq!(state.tabs[1].name, "work-20");
     for line in frame.lines() {
@@ -934,14 +934,102 @@ fn watcher_suffix_survives_truncation_and_tracks_the_owning_pane() {
     )));
     state.render(3, 30);
     let frame = state.host.frames.last().unwrap();
-    assert!(frame.contains(" R"), "{frame:?}");
+    assert!(frame.contains("2:R● wo..."), "{frame:?}");
     assert!(frame.contains('●'), "{frame:?}");
     assert!(state.pipe(message(
         "pi_status",
         r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":3,"pane_id":9,"mode":"base"}"#,
     )));
     state.render(3, 30);
-    assert!(!state.host.frames.last().unwrap().contains(" R"));
+    assert!(!state.host.frames.last().unwrap().contains("2:R"));
+}
+
+#[test]
+fn watcher_and_marker_follow_first_status_pane_through_move_and_closure() {
+    for pane_first in [true, false] {
+        let mut state = state();
+        state.update(Event::TabUpdate(vec![tab(10, 0, true), tab(90, 1, false)]));
+        let mut panes = manifest(0);
+        panes.panes.get_mut(&0).unwrap().push(PaneInfo {
+            id: 9,
+            ..PaneInfo::default()
+        });
+        state.update(Event::PaneUpdate(panes.clone()));
+        state.update(Event::Visible(true));
+        state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"first","seq":1,"pane_id":4,"mode":"compacting","watchers":"R"}"#));
+        state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"second","seq":1,"pane_id":9,"mode":"working","watchers":"S"}"#));
+        state.render(3, 30);
+        let frame = state.host.frames.last().unwrap();
+        assert!(frame.contains("1:R◐ work-10"), "{frame:?}");
+        assert!(!frame.contains("S⠋"), "{frame:?}");
+        let moved_panes = PaneManifest {
+            panes: [(1, panes.panes.remove(&0).unwrap())].into(),
+        };
+        let moved_tabs = vec![tab(90, 0, false), tab(10, 1, true)];
+        if pane_first {
+            state.update(Event::PaneUpdate(moved_panes.clone()));
+            state.update(Event::TabUpdate(moved_tabs));
+        } else {
+            state.update(Event::TabUpdate(moved_tabs));
+            state.update(Event::PaneUpdate(moved_panes.clone()));
+        }
+        state.render(3, 30);
+        let frame = state.host.frames.last().unwrap();
+        assert!(frame.contains("2:R◐ work-10"), "{frame:?}");
+        assert!(frame.contains("1:work-90"), "{frame:?}");
+        click(&mut state, 1);
+        assert_eq!(state.host.switches, [2]);
+        let empty = PaneManifest::default();
+        let remaining = vec![tab(90, 0, true)];
+        if pane_first {
+            state.update(Event::PaneUpdate(empty));
+            state.update(Event::TabUpdate(remaining));
+        } else {
+            state.update(Event::TabUpdate(remaining));
+            state.update(Event::PaneUpdate(empty));
+        }
+        state.render(3, 30);
+        let frame = state.host.frames.last().unwrap();
+        assert!(frame.contains("1:work-90 *"), "{frame:?}");
+        assert!(!frame.contains("R◐") && !frame.contains("S⠋"), "{frame:?}");
+    }
+}
+
+#[test]
+fn viewed_done_keeps_watchers_and_sequence_fence_until_off_or_shutdown() {
+    let mut state = state();
+    state.update(Event::PaneUpdate(manifest(0)));
+    state.update(Event::TabUpdate(vec![tab(10, 0, true)]));
+    let done = r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":7,"pane_id":4,"mode":"done","watchers":"SRPICC"}"#;
+    assert!(!state.pipe(message("pi_status", done)));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("CIRS● work-10"));
+    assert!(state.update(Event::Visible(true)));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("CIRS work-10"));
+    let status = state.statuses.get(&4).unwrap();
+    assert_eq!(status.mode, AgentMode::Base);
+    assert_eq!(status.seq, 7);
+    assert_eq!(status.runtime_id, "run-1");
+    assert!(!state.pipe(message("pi_status", done)));
+    assert!(!state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":6,"pane_id":4,"mode":"working","watchers":"S"}"#)));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("CIRS work-10"));
+    assert!(state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":8,"pane_id":4,"mode":"base","watchers":""}"#)));
+    state.render(2, 30);
+    assert!(!state.host.frames.last().unwrap().contains("CIRS"));
+    state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":9,"pane_id":4,"mode":"base","watchers":"I"}"#));
+    assert!(!state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"remove","runtime_id":"foreign","seq":99,"pane_id":4}"#
+    )));
+    assert!(state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"remove","runtime_id":"run-1","seq":10,"pane_id":4}"#
+    )));
+    state.render(2, 30);
+    assert!(state.host.frames.last().unwrap().contains("1:work-10 *"));
+    assert!(state.host.timeouts.is_empty());
 }
 
 #[test]

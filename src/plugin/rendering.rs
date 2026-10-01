@@ -10,6 +10,7 @@ use super::status::{AgentStatus, marker};
 use crate::{calculate_visible_range, truncate_string};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthStr;
 use zellij_tile::prelude::{InputMode, ModeInfo, PaneManifest, TabInfo};
 
 pub(super) struct Frame {
@@ -121,16 +122,39 @@ impl RenderContext<'_> {
             indicators.push_str(&self.style.indicator_active);
         }
 
+        let mut prefix = String::new();
+        if let Some(status) = self.status_for_tab(tab.position) {
+            prefix.extend(
+                "CIRS"
+                    .chars()
+                    .filter(|letter| status.watchers.contains(*letter)),
+            );
+            prefix.push_str(marker(status.mode, self.status_frame));
+            if !prefix.is_empty() {
+                prefix.push(' ');
+            }
+        }
+
         for token in tokens {
             match token {
                 FormatToken::Style(style) => {
                     current_style = style.clone();
                 }
                 FormatToken::Variable { name, width } => {
-                    let value = match name.as_str() {
+                    let name_width = name
+                        .split_once(':')
+                        .filter(|(name, _)| matches!(*name, "name" | "n"))
+                        .and_then(|(name, width)| {
+                            width.parse::<usize>().ok().map(|width| (name, width))
+                        });
+                    let name = name_width.map_or(name.as_str(), |(name, _)| name);
+                    let budget = width
+                        .or(name_width.map(|(_, width)| width))
+                        .unwrap_or(self.style.max_name_length);
+                    let value = match name {
                         "index" | "i" => index.to_string(),
                         "name" | "n" => {
-                            let name = if tab.active
+                            if tab.active
                                 && self.mode_info.mode == InputMode::RenameTab
                                 && tab.name.is_empty()
                             {
@@ -140,14 +164,6 @@ impl RenderContext<'_> {
                             } else {
                                 self.focused_pane_directory(tab.position)
                                     .unwrap_or_else(|| pane_title.to_owned())
-                            };
-                            let status = self
-                                .status_for_tab(tab.position)
-                                .map_or("", |status| marker(status.mode, self.status_frame));
-                            if status.is_empty() {
-                                name
-                            } else {
-                                format!("{status} {name}")
                             }
                         }
                         "title" | "t" | "pane_title" => pane_title.to_owned(),
@@ -176,33 +192,17 @@ impl RenderContext<'_> {
                         _ => format!("{{{name}}}"),
                     };
 
-                    let budget = width.unwrap_or(self.style.max_name_length);
-                    let suffix = if matches!(name.as_str(), "name" | "n") {
-                        self.status_for_tab(tab.position)
-                            .filter(|status| !status.watchers.is_empty())
-                            .map(|status| format!(" {}", status.watchers))
-                            .unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    let text = if suffix.len() >= budget {
-                        let marker = self
-                            .status_for_tab(tab.position)
-                            .map_or("", |status| marker(status.mode, self.status_frame));
-                        format!(
-                            "{}{}",
-                            marker,
-                            truncate_string(&suffix, budget.saturating_sub(marker.chars().count()))
-                        )
-                    } else {
-                        let name_budget = budget - suffix.len();
-                        let name = if name_budget <= 2 {
-                            self.status_for_tab(tab.position)
-                                .map_or("", |status| marker(status.mode, self.status_frame))
+                    let text = if matches!(name, "name" | "n") && !prefix.is_empty() {
+                        let prefix_width = prefix.width();
+                        if budget <= prefix_width {
+                            let mut styled_prefix = StyledText::new();
+                            styled_prefix.push(prefix.clone(), InlineStyle::default());
+                            build_line(&styled_prefix, &StyledText::new(), budget, false)
                         } else {
-                            &value
-                        };
-                        format!("{}{}", truncate_string(name, name_budget), suffix)
+                            format!("{prefix}{}", truncate_string(&value, budget - prefix_width))
+                        }
+                    } else {
+                        truncate_string(&value, budget)
                     };
                     result.push(text, current_style.clone());
                 }
@@ -377,6 +377,218 @@ mod tests {
             .lines()
             .map(|line| line.trim_end().to_string())
             .collect()
+    }
+
+    fn watcher_frame(
+        mode: super::super::status::AgentMode,
+        watchers: &str,
+        name: &str,
+        format: &str,
+        budget: usize,
+        cols: usize,
+    ) -> Frame {
+        use zellij_tile::prelude::PaneInfo;
+
+        let tabs = [TabInfo {
+            name: name.into(),
+            ..tab(10, 0, true)
+        }];
+        let manifest = PaneManifest {
+            panes: std::collections::HashMap::from([(
+                0,
+                vec![
+                    PaneInfo {
+                        id: 1,
+                        is_plugin: true,
+                        ..PaneInfo::default()
+                    },
+                    PaneInfo {
+                        id: 2,
+                        ..PaneInfo::default()
+                    },
+                    PaneInfo {
+                        id: 3,
+                        ..PaneInfo::default()
+                    },
+                    PaneInfo {
+                        id: 4,
+                        is_focused: true,
+                        ..PaneInfo::default()
+                    },
+                ],
+            )]),
+        };
+        let status = AgentStatus {
+            runtime_id: "test".into(),
+            seq: 1,
+            mode,
+            watchers: watchers.into(),
+        };
+        let statuses = BTreeMap::from([
+            (
+                1,
+                AgentStatus {
+                    watchers: "S".into(),
+                    ..status.clone()
+                },
+            ),
+            (3, status.clone()),
+            (
+                4,
+                AgentStatus {
+                    mode: super::super::status::AgentMode::Done,
+                    watchers: "R".into(),
+                    ..status
+                },
+            ),
+        ]);
+        let tokens = super::super::formatting::parse_tmux_format(format);
+        let style = StyleConfig {
+            format: tokens.clone(),
+            format_active: tokens,
+            max_name_length: budget,
+            ..StyleConfig::default()
+        };
+        RenderContext {
+            tabs: &tabs,
+            active_tab_idx: 1,
+            mode_info: &ModeInfo::default(),
+            pane_manifest: &manifest,
+            pane_cwds: &BTreeMap::new(),
+            style: &style,
+            activity: &BTreeMap::new(),
+            statuses: &statuses,
+            status_frame: 0,
+            own_session: "",
+        }
+        .render(1, cols)
+    }
+
+    #[test]
+    fn watcher_prefix_uses_first_status_pane_and_hides_p() {
+        use super::super::status::AgentMode::{Base, Compacting, Done, Working};
+
+        for (mode, watchers, expected) in [
+            (Working, "CIPRS", "1:CIRS⠋ work"),
+            (Base, "CIPRS", "1:CIRS work"),
+            (Working, "P", "1:⠋ work"),
+            (Base, "P", "1:work"),
+            (Base, "", "1:work"),
+            (Compacting, "CIPRS", "1:CIRS◐ work"),
+            (Done, "CIPRS", "1:CIRS● work"),
+        ] {
+            let frame = watcher_frame(mode, watchers, "work", "{index}:{name}", 20, 24);
+            assert_eq!(plain_lines(&frame), [expected]);
+        }
+    }
+
+    #[test]
+    fn watcher_prefix_is_reserved_before_name_truncation() {
+        use super::super::status::AgentMode::Working;
+
+        for (budget, expected) in [
+            (0, ""),
+            (1, "C"),
+            (2, "CI"),
+            (3, "CIR"),
+            (4, "CIRS"),
+            (5, "CIRS⠋"),
+            (6, "CIRS⠋"),
+            (7, "CIRS⠋ ."),
+            (8, "CIRS⠋ .."),
+            (10, "CIRS⠋ w..."),
+        ] {
+            let frame = watcher_frame(Working, "CIPRS", "work-long", "{name}", budget, 24);
+            assert_eq!(plain_lines(&frame), [expected], "budget {budget}");
+        }
+        for (cols, expected) in [(0, ""), (1, "C"), (2, "CI"), (5, "CIRS⠋")] {
+            let frame = watcher_frame(Working, "CIPRS", "work-long", "{name}", 20, cols);
+            assert_eq!(
+                plain_lines(&frame),
+                if cols == 0 {
+                    vec![]
+                } else {
+                    vec![expected.to_string()]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn watcher_prefix_respects_name_alias_width_and_unicode() {
+        use super::super::status::AgentMode::Working;
+
+        for (format, name, expected) in [
+            ("{index} / {name:10}", "界界界界", "1 / CIRS⠋ ..."),
+            ("{index} / {n:9}", "界e\u{301}", "1 / CIRS⠋ 界e\u{301}"),
+            ("{name:8}", "界", "CIRS⠋ 界"),
+            ("{=8:name}", "界", "CIRS⠋ 界"),
+            ("{=1:i}:{name}", "work", "1:CIRS⠋ work"),
+        ] {
+            let frame = watcher_frame(Working, "CIPRS", name, format, 20, 30);
+            assert_eq!(plain_lines(&frame), [expected]);
+        }
+    }
+
+    #[test]
+    fn watcher_prefix_preserves_active_fill_and_border() {
+        use super::super::formatting::parse_tmux_format;
+        use super::super::status::AgentMode::Working;
+        use zellij_tile::prelude::PaneInfo;
+
+        let tabs = [TabInfo {
+            name: "work".into(),
+            ..tab(10, 0, true)
+        }];
+        let manifest = PaneManifest {
+            panes: std::collections::HashMap::from([(
+                0,
+                vec![PaneInfo {
+                    id: 3,
+                    ..PaneInfo::default()
+                }],
+            )]),
+        };
+        let statuses = BTreeMap::from([(
+            3,
+            AgentStatus {
+                runtime_id: "test".into(),
+                seq: 1,
+                mode: Working,
+                watchers: "CIPRS".into(),
+            },
+        )]);
+        let style = StyleConfig {
+            format_active: parse_tmux_format("#[bg=236,fill]{index} / {n}"),
+            border: parse_styled_string("│"),
+            ..StyleConfig::default()
+        };
+        let frame = RenderContext {
+            tabs: &tabs,
+            active_tab_idx: 1,
+            mode_info: &ModeInfo::default(),
+            pane_manifest: &manifest,
+            pane_cwds: &BTreeMap::new(),
+            style: &style,
+            activity: &BTreeMap::new(),
+            statuses: &statuses,
+            status_frame: 0,
+            own_session: "",
+        }
+        .render(1, 18);
+
+        let text = frame.text.as_deref().unwrap();
+        assert_eq!(
+            text,
+            "\x1b[7m\x1b[0m\x1b[7m\x1b[38;5;236m1\x1b[0m\x1b[7m\x1b[38;5;236m / \x1b[0m\x1b[7m\x1b[38;5;236mCIRS⠋ work   \x1b[0m│\x1b[m"
+        );
+        assert_eq!(
+            frame.row_actions,
+            [Some(RowAction::SwitchTab {
+                tab_id: 10,
+                position: 0
+            })]
+        );
     }
 
     #[test]

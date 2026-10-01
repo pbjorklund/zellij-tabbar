@@ -25,15 +25,15 @@ You can also run pi in these tabs without installing anything else. The sidebar 
 The optional [zellij-pi-tab-status](https://github.com/pbjorklund/zellij-pi-tab-status) extension supplies pane-scoped agent status. The sidebar owns displayed labels; the companion does not rename tabs or overwrite explicit user names. For example:
 
 ```text
-1:⠹ app-fix-login
-2:● app-add-search
-3:app*
+1:CIRS⠹ app-fix-login
+2:I● app-add-search
+3:C app*
 ```
 
 - The spinner means pi or a tracked subagent is working.
 - `●` means a background run has finished and you have not viewed its tab yet. Viewing the tab clears the marker.
 - `*` marks the active Zellij tab in the supplied layout, not agent completion.
-- Optional watch letters after the tab name show active checklist (`C`), improvement (`I`), project-task (`P`), review (`R`), and Sentry (`S`) watchers, in `CIPRS` order. They use part of the `max_name_length` budget so truncating a long name does not hide them; the sidebar still clips rows to its width.
+- Optional watch letters prefix the name before the spinner or completion marker: checklist (`C`), improvement (`I`), review (`R`), and Sentry (`S`), in `CIRS` order. A letter means the watcher is non-off, including polling, queued, working, waiting, paused, and error states; it does not mean agent work is running. Idle tabs keep their letters. Prefixes use part of the name's display-column budget; narrow rows clip the prefix before showing the name.
 
 The extension waits for pi's full run to settle before marking it complete, rather than treating a pause between retries or queued follow-ups as done. The sidebar clears completion when you view its tab; the extension removes its status when pi exits.
 
@@ -46,7 +46,7 @@ They run in different hosts and have different jobs:
 | `zellij-tabbar` | Zellij, as a WASM plugin | Owns displayed labels, animates supplied status, handles mouse navigation, and renders optional activity rows |
 | `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events and publishes pane-scoped status transitions without renaming tabs |
 
-The extension sends a `pi_status` v1 snapshot when lifecycle state changes and replays the same active snapshot every five seconds so newly loaded sidebars catch up. A snapshot may include a `watchers` string; missing means no watch letters. The sidebar keeps only distinct `CIPRS` letters in that order, scoped to the owning pane and cleared on removal. Older snapshots remain valid. Existing sidebars ignore the duplicate sequence. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
+The extension sends a `pi_status` v1 snapshot when lifecycle state changes and replays the same active snapshot every five seconds so newly loaded sidebars catch up. A snapshot may include a `watchers` string; missing means no watch letters. The compatible payload keeps distinct `CIPRS` letters in that order, but the sidebar displays only `CIRS`, not project-task `P`. Status is scoped to its pane; when several panes in a tab have status, the first non-plugin pane with status in the pane manifest supplies the row, rather than merging watchers across panes. Removal clears that runtime's status, and viewing completion clears only the completion marker, not watch letters. Older snapshots remain valid. Abrupt crashes have no promised status expiry. Existing sidebars ignore the duplicate sequence. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
 
 The sidebar still works without pi. The companion extension now requires this sidebar to display status; Zellij's built-in horizontal tab bar shows only the static tab name. Extra todo and subagent rows use the separate [activity pipe](#activity-rows).
 
@@ -125,7 +125,7 @@ To try the workflow, start a task in pi, then switch to another tab before it fi
 
 ## Configure the sidebar
 
-Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the status marker, explicit tab name or directory label, and any watch letters. A `pi_status` snapshot supplies status, not the name:
+Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays watch letters, the status marker, then the explicit tab name or directory label. A `pi_status` snapshot supplies status, not the name:
 
 ```kdl
 pane size=32 borderless=true {
@@ -261,7 +261,7 @@ This separate disposable test starts Bash with profiles and rc files disabled, c
 
 Both live tests use upstream `zellij` from PATH by default; use `--zellij <path>` to select an upstream executable.
 
-The smoke test creates its own disposable PTY session and checks local status animation, completion clearing, tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar protocol, not the companion pi extension or an intermittent hang in an existing session.
+The smoke test creates its own disposable PTY session and checks the exact `CIRS` prefix, idle watchers, off/removal, animation, completion clearing with watchers retained, tab switches, renames, movement, closure, resizing, and mouse clicks. It does not replace your installed plugin or stop existing sessions. Use `--wasm <path>` to select another artifact or `--timeout <seconds>` to change the default 20-second assertion timeout. It tests the sidebar protocol, not the companion pi extension or an intermittent hang in an existing session.
 
 Run `cargo bench --locked --bench plugin` for host rendering and permission-replay benchmarks. Activity cases cover 1,000 subagents and a 1MB title in a three-row viewport, to catch work on text and rows that cannot fit. Compare timings on the same machine; they exclude Zellij's WASM execution and terminal output.
 

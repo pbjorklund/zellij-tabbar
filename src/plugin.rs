@@ -368,7 +368,11 @@ impl<H: Host> Tabbar<H> {
                     .get(&pane.id)
                     .is_some_and(|status| status.mode == AgentMode::Done)
             {
-                self.statuses.remove(&pane.id);
+                if self.statuses[&pane.id].watchers.is_empty() {
+                    self.statuses.remove(&pane.id);
+                } else if let Some(status) = self.statuses.get_mut(&pane.id) {
+                    status.mode = AgentMode::Base;
+                }
             }
         }
     }

@@ -322,12 +322,14 @@ keybinds clear-defaults=true {
                         self.pump()
         raise RuntimeError(f"timed out waiting for {label}; expected {expected}\n" + "\n".join(self.screen.lines()))
 
-    def expect(self, names, active, label, absent=()):
-        expected = [f"{self.prefix}-{'A' if name == active else 'I'}{i}:{name}"
+    def expect(self, names, active, label, absent=(), watchers=None):
+        watchers = watchers or {}
+        expected = [f"{self.prefix}-{'A' if name == active else 'I'}{i}:"
+                    f"{watchers[name] + ' ' if watchers.get(name) else ''}{name}"
                     for i, name in enumerate(names, 1)]
         self.expect_labels(expected, active, label, absent=absent)
 
-    def expect_animation(self, names, active, target):
+    def expect_animation(self, names, active, target, watchers=""):
         frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
         seen = None
         deadline = time.monotonic() + self.timeout
@@ -335,7 +337,7 @@ keybinds clear-defaults=true {
             self.pump()
             lines = self.screen.lines()
             for frame in frames:
-                marked = [f"{frame} {name}" if name == target else name for name in names]
+                marked = [f"{watchers}{frame} {name}" if name == target else name for name in names]
                 expected = [f"{self.prefix}-{'A' if names[i - 1] == active else 'I'}{i}:{name}"
                             for i, name in enumerate(marked, 1)]
                 if sidebar_matches(lines, expected):
@@ -350,12 +352,16 @@ keybinds clear-defaults=true {
         return next(pane["id"] for pane in self.panes()
                     if pane.get("tab_name") == tab_name and not pane.get("is_plugin"))
 
-    def status(self, pane_id, mode, seq):
-        payload = json.dumps({
-            "v": 1, "kind": "snapshot", "runtime_id": "smoke", "seq": seq,
-            "pane_id": pane_id, "mode": mode,
-        })
-        self.cli("pipe", "--name", "pi_status", "--", payload)
+    def status(self, pane_id, mode, seq, watchers=None):
+        payload = {
+            "v": 1, "kind": "remove" if mode == "remove" else "snapshot",
+            "runtime_id": "smoke", "seq": seq, "pane_id": pane_id,
+        }
+        if mode != "remove":
+            payload["mode"] = mode
+            if watchers is not None:
+                payload["watchers"] = watchers
+        self.cli("pipe", "--name", "pi_status", "--", json.dumps(payload))
 
     def resize(self, rows, cols):
         self.screen.resize(rows, cols)
@@ -423,16 +429,27 @@ keybinds clear-defaults=true {
         self.expect(["alpha", "beta", "gamma"], "alpha", "wheel back")
 
         alpha_pane = self.pane_for_tab("alpha")
-        self.status(alpha_pane, "working", 1)
-        self.expect_animation(["alpha", "beta", "gamma"], "alpha", "alpha")
-        self.status(alpha_pane, "base", 2)
-        self.expect(["alpha", "beta", "gamma"], "alpha", "clear working status")
-        self.cli("action", "go-to-tab", "2")
-        self.status(alpha_pane, "done", 3)
-        self.expect(["● alpha", "beta", "gamma"], "beta", "background completion")
-        self.cli("action", "go-to-tab", "1")
-        self.expect(["alpha", "beta", "gamma"], "alpha", "viewed completion clears")
-        self.status(alpha_pane, "base", 4)
+        names = ["alpha", "beta", "gamma"]
+        self.status(alpha_pane, "base", 1, watchers="SRPICC")
+        self.expect(names, "alpha", "idle watcher prefix", watchers={"alpha": "CIRS"})
+        self.status(alpha_pane, "working", 2, watchers="CIPRS")
+        self.expect_animation(names, "alpha", "alpha", watchers="CIRS")
+        self.status(alpha_pane, "base", 3, watchers="CIRS")
+        self.expect(names, "alpha", "clear work but keep watchers", watchers={"alpha": "CIRS"})
+        self.status(alpha_pane, "base", 4, watchers="")
+        self.expect(names, "alpha", "watchers off")
+        self.status(alpha_pane, "base", 5, watchers="I")
+        self.expect(names, "alpha", "watcher before removal", watchers={"alpha": "I"})
+        self.status(alpha_pane, "remove", 6)
+        self.expect(names, "alpha", "removal clears watchers")
+        self.click_sidebar(1)
+        self.expect(names, "beta", "click away from watcher tab")
+        self.status(alpha_pane, "done", 7, watchers="CIPRS")
+        self.expect(["CIRS● alpha", "beta", "gamma"], "beta", "watchers before background completion")
+        self.click_sidebar(0)
+        self.expect(names, "alpha", "view clears completion but keeps watchers", watchers={"alpha": "CIRS"})
+        self.status(alpha_pane, "base", 8)
+        self.expect(names, "alpha", "omitted watchers clear prefix")
         self.cli("action", "go-to-tab", "2")
         self.expect(["alpha", "beta", "gamma"], "beta", "switch tab")
         self.cli("action", "rename-tab", "renamed")
