@@ -115,10 +115,10 @@ class WatcherTests(unittest.TestCase):
         return [f"{label:<36}|", *HEALTHY[1:]]
 
     def test_idle_prefix_is_exact_and_before_name(self):
-        expected = ["SBtest-A1:CIRS alpha", *EXPECTED[1:]]
+        expected = ["SBtest-A1:CIPRS alpha", *EXPECTED[1:]]
         self.assertTrue(smoke_zellij.sidebar_matches(self.rows(expected[0]), expected))
         for label in (
-            "SBtest-A1:alpha CIRS", "SBtest-A1:CIPRS alpha",
+            "SBtest-A1:alpha CIPRS", "SBtest-A1:CIRS alpha",
             "SBtest-A1:SIRC alpha", "SBtest-A1:CIRSalpha",
             "SBtest-A1:CIRS alpha-wrong",
         ):

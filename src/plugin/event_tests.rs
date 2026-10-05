@@ -618,7 +618,7 @@ fn background_tabs_keep_status_and_activity_while_active_tabs_keep_activity() {
 
     let frame = state.host.frames.last().unwrap();
     assert!(frame.contains("build"));
-    assert!(frame.contains("CIRS● work-20"));
+    assert!(frame.contains("CIPRS● work-20"));
     assert!(frame.contains("waiting"));
     assert_eq!(
         state.row_actions[3],
@@ -921,7 +921,7 @@ fn watcher_prefix_survives_truncation_and_tracks_the_owning_pane() {
     )));
     state.render(3, 30);
     let frame = state.host.frames.last().unwrap().replace("\x1b[m", "");
-    assert!(frame.contains("2:CIRS⠋ .."), "{frame:?}");
+    assert!(frame.contains("2:CIPRS⠋ ."), "{frame:?}");
     assert!(frame.contains("1:work-10 *"), "{frame:?}");
     assert_eq!(state.tabs[1].name, "work-20");
     for line in frame.lines() {
@@ -1003,10 +1003,10 @@ fn viewed_done_keeps_watchers_and_sequence_fence_until_off_or_shutdown() {
     let done = r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":7,"pane_id":4,"mode":"done","watchers":"SRPICC"}"#;
     assert!(!state.pipe(message("pi_status", done)));
     state.render(2, 30);
-    assert!(state.host.frames.last().unwrap().contains("CIRS● work-10"));
+    assert!(state.host.frames.last().unwrap().contains("CIPRS● work-10"));
     assert!(state.update(Event::Visible(true)));
     state.render(2, 30);
-    assert!(state.host.frames.last().unwrap().contains("CIRS work-10"));
+    assert!(state.host.frames.last().unwrap().contains("CIPRS work-10"));
     let status = state.statuses.get(&4).unwrap();
     assert_eq!(status.mode, AgentMode::Base);
     assert_eq!(status.seq, 7);
@@ -1014,10 +1014,10 @@ fn viewed_done_keeps_watchers_and_sequence_fence_until_off_or_shutdown() {
     assert!(!state.pipe(message("pi_status", done)));
     assert!(!state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":6,"pane_id":4,"mode":"working","watchers":"S"}"#)));
     state.render(2, 30);
-    assert!(state.host.frames.last().unwrap().contains("CIRS work-10"));
+    assert!(state.host.frames.last().unwrap().contains("CIPRS work-10"));
     assert!(state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":8,"pane_id":4,"mode":"base","watchers":""}"#)));
     state.render(2, 30);
-    assert!(!state.host.frames.last().unwrap().contains("CIRS"));
+    assert!(!state.host.frames.last().unwrap().contains("CIPRS"));
     state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run-1","seq":9,"pane_id":4,"mode":"base","watchers":"I"}"#));
     assert!(!state.pipe(message(
         "pi_status",

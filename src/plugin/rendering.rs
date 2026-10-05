@@ -125,7 +125,7 @@ impl RenderContext<'_> {
         let mut prefix = String::new();
         if let Some(status) = self.status_for_tab(tab.position) {
             prefix.extend(
-                "CIRS"
+                "CIPRS"
                     .chars()
                     .filter(|letter| status.watchers.contains(*letter)),
             );
@@ -465,17 +465,21 @@ mod tests {
     }
 
     #[test]
-    fn watcher_prefix_uses_first_status_pane_and_hides_p() {
+    fn watcher_prefix_uses_first_status_pane_and_shows_all_five() {
         use super::super::status::AgentMode::{Base, Compacting, Done, Working};
 
         for (mode, watchers, expected) in [
-            (Working, "CIPRS", "1:CIRS⠋ work"),
-            (Base, "CIPRS", "1:CIRS work"),
-            (Working, "P", "1:⠋ work"),
-            (Base, "P", "1:work"),
+            (Working, "CIPRS", "1:CIPRS⠋ work"),
+            (Base, "CIPRS", "1:CIPRS work"),
+            (Base, "C", "1:C work"),
+            (Base, "I", "1:I work"),
+            (Base, "R", "1:R work"),
+            (Base, "S", "1:S work"),
+            (Working, "P", "1:P⠋ work"),
+            (Base, "P", "1:P work"),
             (Base, "", "1:work"),
-            (Compacting, "CIPRS", "1:CIRS◐ work"),
-            (Done, "CIPRS", "1:CIRS● work"),
+            (Compacting, "CIPRS", "1:CIPRS◐ work"),
+            (Done, "CIPRS", "1:CIPRS● work"),
         ] {
             let frame = watcher_frame(mode, watchers, "work", "{index}:{name}", 20, 24);
             assert_eq!(plain_lines(&frame), [expected]);
@@ -490,18 +494,18 @@ mod tests {
             (0, ""),
             (1, "C"),
             (2, "CI"),
-            (3, "CIR"),
-            (4, "CIRS"),
-            (5, "CIRS⠋"),
-            (6, "CIRS⠋"),
-            (7, "CIRS⠋ ."),
-            (8, "CIRS⠋ .."),
-            (10, "CIRS⠋ w..."),
+            (3, "CIP"),
+            (4, "CIPR"),
+            (5, "CIPRS"),
+            (6, "CIPRS⠋"),
+            (7, "CIPRS⠋"),
+            (8, "CIPRS⠋ ."),
+            (10, "CIPRS⠋ ..."),
         ] {
             let frame = watcher_frame(Working, "CIPRS", "work-long", "{name}", budget, 24);
             assert_eq!(plain_lines(&frame), [expected], "budget {budget}");
         }
-        for (cols, expected) in [(0, ""), (1, "C"), (2, "CI"), (5, "CIRS⠋")] {
+        for (cols, expected) in [(0, ""), (1, "C"), (2, "CI"), (5, "CIPRS")] {
             let frame = watcher_frame(Working, "CIPRS", "work-long", "{name}", 20, cols);
             assert_eq!(
                 plain_lines(&frame),
@@ -519,11 +523,11 @@ mod tests {
         use super::super::status::AgentMode::Working;
 
         for (format, name, expected) in [
-            ("{index} / {name:10}", "界界界界", "1 / CIRS⠋ ..."),
-            ("{index} / {n:9}", "界e\u{301}", "1 / CIRS⠋ 界e\u{301}"),
-            ("{name:8}", "界", "CIRS⠋ 界"),
-            ("{=8:name}", "界", "CIRS⠋ 界"),
-            ("{=1:i}:{name}", "work", "1:CIRS⠋ work"),
+            ("{index} / {name:10}", "界界界界", "1 / CIPRS⠋ ..."),
+            ("{index} / {n:9}", "界e\u{301}", "1 / CIPRS⠋ .."),
+            ("{name:8}", "界", "CIPRS⠋ ."),
+            ("{=8:name}", "界", "CIPRS⠋ ."),
+            ("{=1:i}:{name}", "work", "1:CIPRS⠋ work"),
         ] {
             let frame = watcher_frame(Working, "CIPRS", name, format, 20, 30);
             assert_eq!(plain_lines(&frame), [expected]);
@@ -580,7 +584,7 @@ mod tests {
         let text = frame.text.as_deref().unwrap();
         assert_eq!(
             text,
-            "\x1b[7m\x1b[0m\x1b[7m\x1b[38;5;236m1\x1b[0m\x1b[7m\x1b[38;5;236m / \x1b[0m\x1b[7m\x1b[38;5;236mCIRS⠋ work   \x1b[0m│\x1b[m"
+            "\x1b[7m\x1b[0m\x1b[7m\x1b[38;5;236m1\x1b[0m\x1b[7m\x1b[38;5;236m / \x1b[0m\x1b[7m\x1b[38;5;236mCIPRS⠋ work  \x1b[0m│\x1b[m"
         );
         assert_eq!(
             frame.row_actions,
