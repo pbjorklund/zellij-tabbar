@@ -206,7 +206,7 @@ impl StyledText {
         }
     }
 
-    fn display_width(&self) -> usize {
+    pub(super) fn display_width(&self) -> usize {
         self.segments.iter().map(|s| s.display_width()).sum()
     }
 

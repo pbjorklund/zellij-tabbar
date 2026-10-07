@@ -603,6 +603,7 @@ fn background_tabs_keep_status_and_activity_while_active_tabs_keep_activity() {
             seq: 1,
             mode: AgentMode::Done,
             watchers: "CIPRS".into(),
+            folder: None,
         },
     );
     state.pipe(message(
@@ -1030,6 +1031,79 @@ fn viewed_done_keeps_watchers_and_sequence_fence_until_off_or_shutdown() {
     state.render(2, 30);
     assert!(state.host.frames.last().unwrap().contains("1:work-10 *"));
     assert!(state.host.timeouts.is_empty());
+}
+
+#[test]
+fn automatic_pi_labels_use_folders_and_keep_detailed_watchers_after_viewing_done() {
+    let mut state = state();
+    let mut panes = manifest(0);
+    panes.panes.get_mut(&0).unwrap()[1].title = "π - planning - backoffice".into();
+    let mut automatic = tab(10, 0, true);
+    automatic.name = "Tab #1".into();
+    state.update(Event::PaneUpdate(panes.clone()));
+    state.update(Event::TabUpdate(vec![automatic]));
+    state.update(Event::Visible(true));
+    state.pipe(message("pi_status", r#"{"v":1,"kind":"snapshot","runtime_id":"run","seq":1,"pane_id":4,"mode":"done","folder":"backoffice","watchers":"CP","watcher_states":{"P":{"status":"working"},"C":{"status":"error"}}}"#));
+    state.render(3, 40);
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("backoffice Ce|Pw"), "{frame:?}");
+    assert!(!frame.contains("π -"));
+    assert!(!frame.contains("planning"));
+    assert!(!frame.contains('●'));
+    state.style.max_name_length = 6;
+    state.render(3, 40);
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("Ce|Pw"), "{frame:?}");
+    state.style.max_name_length = 3;
+    state.render(3, 40);
+    let frame = state.host.frames.last().unwrap();
+    assert!(frame.contains("Ce"), "{frame:?}");
+    assert!(!frame.contains('|'));
+    state.style.max_name_length = 30;
+    for cols in 4..16 {
+        state.render(3, cols);
+        let row = state
+            .host
+            .frames
+            .last()
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .replace("\x1b[m", "");
+        let label = row
+            .strip_prefix("1:")
+            .unwrap()
+            .trim_end_matches(" *")
+            .trim();
+        assert!(!label.ends_with('|'), "{row:?}");
+        assert!(!label.ends_with('P'), "{row:?}");
+        assert!(row.width() <= cols);
+    }
+    let mut explicit = tab(10, 0, true);
+    explicit.name = "π - custom".into();
+    state.update(Event::TabUpdate(vec![explicit]));
+    state.render(3, 50);
+    assert!(
+        state
+            .host
+            .frames
+            .last()
+            .unwrap()
+            .contains("π - custom Ce|Pw")
+    );
+    state.pipe(message(
+        "pi_status",
+        r#"{"v":1,"kind":"remove","runtime_id":"run","seq":2,"pane_id":4}"#,
+    ));
+    panes.panes.get_mut(&0).unwrap()[1].title = "π - ampliflow-iac".into();
+    state.update(Event::PaneUpdate(panes));
+    let mut automatic = tab(10, 0, true);
+    automatic.name = "Tab #1".into();
+    state.update(Event::TabUpdate(vec![automatic]));
+    state.render(3, 50);
+    assert!(state.host.frames.last().unwrap().contains("ampliflow-iac"));
+    assert!(!state.host.frames.last().unwrap().contains("π -"));
 }
 
 #[test]

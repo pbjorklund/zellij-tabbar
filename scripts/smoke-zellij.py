@@ -36,7 +36,7 @@ def sidebar_rows_match(rows, expected):
     if len(rows) != len(expected):
         return False
     for row, label in zip(rows, expected):
-        text, border, remainder = row.partition("|")
+        text, border, remainder = row.rpartition("|")
         if text.rstrip(" ") != label or not border or remainder.strip(" "):
             return False
     return True
@@ -213,6 +213,10 @@ keybinds clear-defaults=true {
             f'i=0; while :; do i=$((i + 1)); printf "alive-%s\\n" "$i"; '
             f'printf "%s\\n" "$i" >> {heartbeat}; sleep 0.1; done'
         )
+        gamma_cwd = root / "backoffice"
+        gamma_cwd.mkdir()
+        gamma_cwd_kdl = json.dumps(str(gamma_cwd))
+        gamma_command = json.dumps(r"printf '\033]0;π - planning - backoffice\007'; exec sleep 600", ensure_ascii=False)
         self.new_tab_layout = f'''layout {{
     tab {{
         pane split_direction="vertical" {{
@@ -246,7 +250,7 @@ keybinds clear-defaults=true {
     }}
     tab name="alpha" focus=true {{ pane command="/bin/sh" {{ args "-c" {alpha_command}; }}; }}
     tab name="beta" {{ pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}; }}
-    tab name="gamma" {{ pane command="/bin/sh" {{ args "-c" "exec sleep 600"; }}; }}
+    tab name="gamma" {{ pane command="/bin/sh" cwd={gamma_cwd_kdl} {{ args "-c" {gamma_command}; }}; }}
 }}
 ''', encoding="utf-8")
         self.screen = Screen(24, 100)
@@ -352,13 +356,13 @@ keybinds clear-defaults=true {
         return next(pane["id"] for pane in self.panes()
                     if pane.get("tab_name") == tab_name and not pane.get("is_plugin"))
 
-    def status(self, pane_id, mode, seq, watchers=None):
+    def status(self, pane_id, mode, seq, watchers=None, **detail):
         payload = {
             "v": 1, "kind": "remove" if mode == "remove" else "snapshot",
             "runtime_id": "smoke", "seq": seq, "pane_id": pane_id,
         }
         if mode != "remove":
-            payload["mode"] = mode
+            payload.update(mode=mode, **detail)
             if watchers is not None:
                 payload["watchers"] = watchers
         self.cli("pipe", "--name", "pi_status", "--", json.dumps(payload))
@@ -427,6 +431,31 @@ keybinds clear-defaults=true {
         self.expect(["alpha", "beta", "gamma"], "beta", "wheel forward")
         self.wheel_sidebar(False)
         self.expect(["alpha", "beta", "gamma"], "alpha", "wheel back")
+
+        gamma_pane = self.pane_for_tab("gamma")
+        detail = {"C": {"status": "error"}, "P": {"status": "working"}}
+        self.status(gamma_pane, "base", 1, folder="backoffice", watchers="CP", watcher_states=detail)
+        self.expect(["alpha", "beta", "gamma Ce|Pw"], "alpha", "detailed watcher suffix")
+        self.cli("action", "go-to-tab", "3")
+        self.cli("action", "rename-tab", "Tab #3")
+        self.expect_labels([f"{self.prefix}-I1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-A3:backoffice Ce|Pw"], "Tab #3", "automatic folder label")
+        detail["P"] = {"status": "polling"}
+        self.status(gamma_pane, "base", 2, folder="ampliflow-iac", watchers="CP", watcher_states=detail)
+        self.expect_labels([f"{self.prefix}-I1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-A3:backoffice Ce|Pp"], "Tab #3", "state-only update keeps native folder ahead of bridge fallback")
+        self.cli("action", "rename-tab", "gamma")
+        self.status(gamma_pane, "base", 3, watchers="P", watcher_states={"P": {"status": "working"}})
+        self.expect_labels([f"{self.prefix}-I1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-A3:gamma Pw"], "gamma", "project-only working")
+        self.cli("action", "go-to-tab", "1")
+        self.expect(["alpha", "beta", "gamma Pw"], "alpha", "leave watcher tab before completion")
+        self.status(gamma_pane, "done", 4, watchers="P", watcher_states={"P": {"status": "working"}})
+        self.expect(["alpha", "beta", "● gamma Pw"], "alpha", "completion independent of watcher")
+        self.cli("action", "go-to-tab", "3")
+        self.expect_labels([f"{self.prefix}-I1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-A3:gamma Pw"], "gamma", "view clears completion only")
+        self.status(gamma_pane, "base", 5, watchers="CIPRS", watcher_states={letter: {"status": "polling"} for letter in "SRIPC"})
+        self.expect_labels([f"{self.prefix}-I1:alpha", f"{self.prefix}-I2:beta", f"{self.prefix}-A3:gamma Cp|Pp|Ip|Rp|Sp"], "gamma", "all-five canonical order")
+        self.status(gamma_pane, "base", 6)
+        self.cli("action", "go-to-tab", "1")
+        self.expect(["alpha", "beta", "gamma"], "alpha", "off clears watcher suffix")
 
         alpha_pane = self.pane_for_tab("alpha")
         names = ["alpha", "beta", "gamma"]

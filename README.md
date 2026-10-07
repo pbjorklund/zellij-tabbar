@@ -22,18 +22,18 @@ You can also run pi in these tabs without installing anything else. The sidebar 
 
 ## Add pi status
 
-The optional [zellij-pi-tab-status](https://github.com/pbjorklund/zellij-pi-tab-status) extension supplies pane-scoped agent status. The sidebar owns displayed labels; the companion does not rename tabs or overwrite explicit user names. For example:
+The optional [pi-zellij-tab-status](https://github.com/pbjorklund/pi-zellij-tab-status) extension publishes pane-scoped agent status and folder metadata. Automatic PI labels show only the folder, without `π -` or a PI session name. Explicit Zellij tab names remain unchanged. For example:
 
 ```text
-1:CIPRS⠹ app-fix-login
-2:I● app-add-search
-3:C app*
+1:⠹ ampliflow-iac Ce|Pw
+2:● backoffice Pp
+3:af-cli-dev*
 ```
 
 - The spinner means pi or a tracked subagent is working.
 - `●` means a background run has finished and you have not viewed its tab yet. Viewing the tab clears the marker.
 - `*` marks the active Zellij tab in the supplied layout, not agent completion.
-- Optional watch letters prefix the name before the spinner or completion marker: checklist (`C`), improvement (`I`), project-task (`P`), review (`R`), and Sentry (`S`), in `CIPRS` order. A letter means the watcher is non-off, including polling, queued, working, waiting, paused, and error states; it does not mean agent work is running. Idle tabs keep their letters. Prefixes use part of the name's display-column budget; narrow rows clip the prefix before showing the name.
+- Watcher pairs after the name use `CPIRS` order: checklist (`C`), project tasks (`P`), improvement (`I`), review (`R`), and Sentry (`S`). State letters are `p` polling, `w` working, `e` error, `h` human waiting, `q` queued, `a` paused, and `t` other waiting. `Ce|Pp` means checklist error and project polling. Off watchers are omitted. Narrow rows keep the activity marker first, then complete pairs without dangling separators.
 
 The extension waits for pi's full run to settle before marking it complete, rather than treating a pause between retries or queued follow-ups as done. The sidebar clears completion when you view its tab; the extension removes its status when pi exits.
 
@@ -43,10 +43,12 @@ They run in different hosts and have different jobs:
 
 | Tool | Runs inside | Responsibility |
 | --- | --- | --- |
-| `zellij-tabbar` | Zellij, as a WASM plugin | Owns displayed labels, animates supplied status, handles mouse navigation, and renders optional activity rows |
-| `zellij-pi-tab-status` | pi, as an extension | Reads pi lifecycle events and publishes pane-scoped status transitions without renaming tabs |
+| `zellij-tabbar` | Zellij, as a WASM plugin | Displays tabs, animates supplied agent status, handles mouse navigation, and renders optional activity rows |
+| `pi-zellij-tab-status` | pi, as an extension | Publishes lifecycle transitions, watcher state, and the cwd folder basename without renaming tabs |
 
-The extension sends a `pi_status` v1 snapshot when lifecycle state changes and replays the same active snapshot every five seconds so newly loaded sidebars catch up. A snapshot may include a `watchers` string; missing means no watch letters. The payload and sidebar keep distinct `CIPRS` letters in that order. Status is scoped to its pane; when several panes in a tab have status, the first non-plugin pane with status in the pane manifest supplies the row, rather than merging watchers across panes. Removal clears that runtime's status, and viewing completion clears only the completion marker, not watch letters. Older snapshots remain valid. Abrupt crashes have no promised status expiry. Existing sidebars ignore the duplicate sequence. The visible sidebar advances spinner frames with one local timer; hidden sidebar instances retain state without running animation timers. This keeps status responsive without repeatedly renaming tabs or rebuilding Zellij's session state.
+The extension sends `pi_status` v1 snapshots when lifecycle or watcher state changes, replaying every five seconds, including idle folder metadata. Optional `folder` is a basename, not a full path. Optional `watcher_states` maps known identities to `{ "status": "working" }` or `{ "status": "waiting", "waiting_kind": "human" }`. Missing human evidence means other waiting. Invalid optional entries are ignored without losing valid activity; unusable detail falls back to legacy `watchers` letters, while an empty detail map clears badges.
+
+Legacy `watchers` strings still render distinct `CIPRS` letters without inferred states. New bridges retain this field for old sidebars. Watchers use the first non-plugin pane with status; automatic folder labels use the focused pane. Removal clears that runtime's metadata. Viewing a completed tab clears only its completion marker. Existing sidebars ignore duplicate sequences. The visible sidebar animates with one local timer; hidden instances retain state without animation.
 
 The sidebar still works without pi. The companion extension now requires this sidebar to display status; Zellij's built-in horizontal tab bar shows only the static tab name. Extra todo and subagent rows use the separate [activity pipe](#activity-rows).
 
@@ -111,12 +113,12 @@ The [main layout](examples/vertical-tabs-left.kdl) uses 32 columns. The optional
 
 ## Install pi status (optional)
 
-Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.84.3 or newer and Zellij's `list-panes`, `list-tabs`, and `pipe` actions.
+Skip this section if you only want the sidebar. For automatic agent markers, you need pi 0.87.0 or newer and Zellij's `list-panes`, `list-tabs`, and `pipe` actions.
 
 Install the companion package:
 
 ```sh
-pi install git:github.com/pbjorklund/zellij-pi-tab-status
+pi install git:github.com/pbjorklund/pi-zellij-tab-status
 ```
 
 Start a new pi TUI inside a Zellij terminal pane. The extension runs automatically there and does nothing outside Zellij. As with any pi extension, review its source before installing: it runs with your user permissions.
@@ -125,7 +127,7 @@ To try the workflow, start a task in pi, then switch to another tab before it fi
 
 ## Configure the sidebar
 
-Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays watch letters, the status marker, then the explicit tab name or directory label. A `pi_status` snapshot supplies status, not the name:
+Set options in the layout's plugin pane. These settings work with or without pi. `{name}` displays the status marker, explicit tab name or automatic folder label, and watcher badges supplied by `pi_status`:
 
 ```kdl
 pane size=32 borderless=true {
@@ -156,7 +158,7 @@ pane size=32 borderless=true {
 | `activity_format` | `#[fg=dim]{activity}` | Style wrapper for activity rows |
 | `diagnostics` | `false` | Set to `"true"` for sampled diagnostics in Zellij's log |
 
-Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `{sync}`, and `{active}`. Use `{=12:title}` to limit a variable to 12 display columns. Default tab names use the focused non-plugin pane's cwd basename. When cwd is unavailable they fall back to its title; placeholder titles fall back to `...`. `{title}` still displays the pane title and does not use cwd. The sidebar does not write these labels back to Zellij tab names.
+Formats accept `{index}`, `{name}`, `{title}`, `{indicators}`, `{fullscreen}`, `{sync}`, and `{active}`. Use `{=12:title}` to limit a variable to 12 display columns. Default tab names use the focused non-plugin pane's cwd basename, then PI folder metadata when cwd is unavailable. Without either, the pane title is used with one leading `π - ` removed; placeholder titles fall back to `...`. Explicit tab names and `{title}` stay literal. Activity lookup still uses the original title. The sidebar does not write these labels back to Zellij tab names.
 
 Inline styles use `#[fg=...,bg=...,bold,dim,fill]`. Colors can be names, 8-bit indices, `#RGB`, `#RRGGBB`, or `rgb(r,g,b)`. `fill` extends the active row's background through its padding, but not its border. Raw terminal control characters in labels and activity text become spaces so each item stays on one row.
 

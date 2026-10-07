@@ -70,6 +70,13 @@ class SidebarMatcherTests(unittest.TestCase):
     def test_ignores_adjacent_pane(self):
         self.assertTrue(smoke_zellij.sidebar_matches(HEALTHY, EXPECTED, absent=("adjacent pane",)))
 
+    def test_badge_separators_are_not_mistaken_for_the_border(self):
+        label = "SBtest-A1:backoffice Ce|Pw"
+        row = label.ljust(36) + "|"
+        self.assertTrue(smoke_zellij.sidebar_matches([row], [label]))
+        for wrong in ["SBtest-A1:π - backoffice Ce|Pw", "SBtest-A1:backoffice Ce|P", "SBtest-A1:backoffice Ce|Pp", "SBtest-A1:backoffice Ce|Pw|"]:
+            self.assertFalse(smoke_zellij.sidebar_matches([wrong.ljust(36) + "|"], [label]))
+
     def test_rejects_stale_name_below_labels(self):
         lines = HEALTHY + ["stale-name                           |"]
         self.assertFalse(smoke_zellij.sidebar_matches(lines, EXPECTED, absent=("stale-name",)))

@@ -62,6 +62,31 @@ impl RenderContext<'_> {
             .or_else(|| (cwd.as_os_str() == "/").then(|| "/".to_owned()))
     }
 
+    fn automatic_name(&self, tab_position: usize, title: &str) -> String {
+        let folder = self
+            .pane_manifest
+            .panes
+            .get(&tab_position)
+            .and_then(|panes| {
+                panes
+                    .iter()
+                    .find(|pane| pane.is_focused && !pane.is_plugin)
+                    .and_then(|pane| self.statuses.get(&pane.id))
+                    .and_then(|status| status.folder.as_deref())
+            });
+        self.focused_pane_directory(tab_position)
+            .unwrap_or_else(|| {
+                folder
+                    .unwrap_or_else(|| {
+                        title
+                            .strip_prefix("π - ")
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or(title)
+                    })
+                    .to_owned()
+            })
+    }
+
     fn status_for_tab(&self, tab_position: usize) -> Option<&AgentStatus> {
         self.pane_manifest
             .panes
@@ -94,6 +119,7 @@ impl RenderContext<'_> {
         tokens: &[FormatToken],
         tab: &TabInfo,
         index: usize,
+        cols: usize,
     ) -> StyledText {
         let mut result = StyledText::new();
         let mut current_style = InlineStyle::default();
@@ -122,18 +148,54 @@ impl RenderContext<'_> {
             indicators.push_str(&self.style.indicator_active);
         }
 
-        let mut prefix = String::new();
-        if let Some(status) = self.status_for_tab(tab.position) {
-            prefix.extend(
-                "CIPRS"
-                    .chars()
-                    .filter(|letter| status.watchers.contains(*letter)),
-            );
-            prefix.push_str(marker(status.mode, self.status_frame));
-            if !prefix.is_empty() {
-                prefix.push(' ');
-            }
-        }
+        let fixed_width: usize = tokens
+            .iter()
+            .map(|token| match token {
+                FormatToken::Literal(text) => text.width(),
+                FormatToken::Style(_) => 0,
+                FormatToken::Variable { name, width } => {
+                    let name = name
+                        .split_once(':')
+                        .filter(|(name, width)| {
+                            matches!(*name, "name" | "n") && width.parse::<usize>().is_ok()
+                        })
+                        .map_or(name.as_str(), |(name, _)| name);
+                    let value = match name {
+                        "name" | "n" => return 0,
+                        "index" | "i" => index.to_string(),
+                        "title" | "t" | "pane_title" => pane_title.to_owned(),
+                        "indicators" => indicators.clone(),
+                        "fullscreen" => {
+                            if tab.is_fullscreen_active {
+                                self.style.indicator_fullscreen.clone()
+                            } else {
+                                String::new()
+                            }
+                        }
+                        "sync" => {
+                            if tab.is_sync_panes_active {
+                                self.style.indicator_sync.clone()
+                            } else {
+                                String::new()
+                            }
+                        }
+                        "active" => {
+                            if tab.active {
+                                self.style.indicator_active.clone()
+                            } else {
+                                String::new()
+                            }
+                        }
+                        _ => format!("{{{name}}}"),
+                    };
+                    value
+                        .width()
+                        .min(width.unwrap_or(self.style.max_name_length))
+                }
+            })
+            .sum();
+        let available_name_width =
+            cols.saturating_sub(fixed_width + self.style.border.display_width());
 
         for token in tokens {
             match token {
@@ -162,8 +224,7 @@ impl RenderContext<'_> {
                             } else if !tab.name.starts_with("Tab #") && !tab.name.is_empty() {
                                 tab.name.clone()
                             } else {
-                                self.focused_pane_directory(tab.position)
-                                    .unwrap_or_else(|| pane_title.to_owned())
+                                self.automatic_name(tab.position, pane_title)
                             }
                         }
                         "title" | "t" | "pane_title" => pane_title.to_owned(),
@@ -192,14 +253,49 @@ impl RenderContext<'_> {
                         _ => format!("{{{name}}}"),
                     };
 
-                    let text = if matches!(name, "name" | "n") && !prefix.is_empty() {
-                        let prefix_width = prefix.width();
-                        if budget <= prefix_width {
+                    let budget = if matches!(name, "name" | "n") {
+                        budget.min(available_name_width)
+                    } else {
+                        budget
+                    };
+                    let suffix = if matches!(name, "name" | "n") {
+                        self.status_for_tab(tab.position)
+                            .filter(|status| !status.watchers.is_empty())
+                            .map(|status| format!(" {}", status.watchers))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let detailed = suffix
+                        .trim_start()
+                        .split('|')
+                        .all(|pair| pair.len() == 2 && pair.as_bytes()[1].is_ascii_lowercase());
+                    let text = if detailed {
+                        let marker = self
+                            .status_for_tab(tab.position)
+                            .map_or("", |status| marker(status.mode, self.status_frame));
+                        let value = if marker.is_empty() {
+                            value
+                        } else {
+                            format!("{marker} {value}")
+                        };
+                        watched_name(&value, marker, suffix.trim_start(), budget)
+                    } else if matches!(name, "name" | "n") {
+                        let marker = self
+                            .status_for_tab(tab.position)
+                            .map_or("", |status| marker(status.mode, self.status_frame));
+                        let prefix = format!("{}{marker}", suffix.trim_start());
+                        if prefix.is_empty() {
+                            truncate_string(&value, budget)
+                        } else if budget <= prefix.width() {
                             let mut styled_prefix = StyledText::new();
-                            styled_prefix.push(prefix.clone(), InlineStyle::default());
+                            styled_prefix.push(prefix, InlineStyle::default());
                             build_line(&styled_prefix, &StyledText::new(), budget, false)
                         } else {
-                            format!("{prefix}{}", truncate_string(&value, budget - prefix_width))
+                            format!(
+                                "{prefix} {}",
+                                truncate_string(&value, budget - prefix.width() - 1)
+                            )
                         }
                     } else {
                         truncate_string(&value, budget)
@@ -271,6 +367,7 @@ impl RenderContext<'_> {
                     format,
                     tab,
                     tab.position.saturating_add(self.style.start_index),
+                    cols,
                 );
                 let action = switch_action(tab);
                 lines.push(build_line(&styled, &self.style.border, cols, is_active));
@@ -317,6 +414,46 @@ impl RenderContext<'_> {
             Some(frame)
         };
         Frame { text, row_actions }
+    }
+}
+
+fn watched_name(value: &str, marker: &str, watchers: &str, budget: usize) -> String {
+    let marker_width = marker.width();
+    if budget == 0 {
+        return String::new();
+    }
+    if budget <= marker_width {
+        return marker.to_owned();
+    }
+    let available = budget.saturating_sub(marker_width + usize::from(!marker.is_empty()));
+    let mut pairs = String::new();
+    for pair in watchers.split('|') {
+        let needed = pairs.len() + usize::from(!pairs.is_empty()) + pair.len();
+        if needed > available {
+            break;
+        }
+        if !pairs.is_empty() {
+            pairs.push('|');
+        }
+        pairs.push_str(pair);
+    }
+    if pairs.is_empty() {
+        return if marker.is_empty() {
+            truncate_string(value, budget)
+        } else {
+            marker.to_owned()
+        };
+    }
+    let name_budget = budget.saturating_sub(pairs.len() + 1);
+    let name = if name_budget <= marker_width + 2 {
+        marker.to_owned()
+    } else {
+        truncate_string(value, name_budget)
+    };
+    if name.is_empty() {
+        pairs
+    } else {
+        format!("{name} {pairs}")
     }
 }
 
@@ -423,6 +560,7 @@ mod tests {
             seq: 1,
             mode,
             watchers: watchers.into(),
+            folder: None,
         };
         let statuses = BTreeMap::from([
             (
@@ -480,6 +618,10 @@ mod tests {
             (Base, "", "1:work"),
             (Compacting, "CIPRS", "1:CIPRS◐ work"),
             (Done, "CIPRS", "1:CIPRS● work"),
+            (Working, "Ce|Pw", "1:⠋ work Ce|Pw"),
+            (Compacting, "Ce|Pw", "1:◐ work Ce|Pw"),
+            (Done, "Ce|Pw", "1:● work Ce|Pw"),
+            (Base, "Ce|Pw", "1:work Ce|Pw"),
         ] {
             let frame = watcher_frame(mode, watchers, "work", "{index}:{name}", 20, 24);
             assert_eq!(plain_lines(&frame), [expected]);
@@ -535,6 +677,22 @@ mod tests {
     }
 
     #[test]
+    fn detailed_pairs_and_markers_survive_narrow_alias_formats() {
+        use super::super::status::AgentMode::{Base, Compacting, Done, Working};
+        for format in ["{name}", "{name:20}", "{n:20}", "{=20:name}"] {
+            for (mode, expected) in [
+                (Base, "Ce|Pw"),
+                (Working, "⠋ Ce"),
+                (Compacting, "◐ Ce"),
+                (Done, "● Ce"),
+            ] {
+                let frame = watcher_frame(mode, "Ce|Pw", "界面-long", format, 20, 5);
+                assert_eq!(plain_lines(&frame), [expected], "{format}");
+            }
+        }
+    }
+
+    #[test]
     fn watcher_prefix_preserves_active_fill_and_border() {
         use super::super::formatting::parse_tmux_format;
         use super::super::status::AgentMode::Working;
@@ -560,6 +718,7 @@ mod tests {
                 seq: 1,
                 mode: Working,
                 watchers: "CIPRS".into(),
+                folder: None,
             },
         )]);
         let style = StyleConfig {
