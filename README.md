@@ -56,14 +56,14 @@ The sidebar still works without pi. The companion extension now requires this si
 
 Use upstream Zellij 0.45.1 or newer. The plugin builds against the crates.io `zellij-tile` 0.45.1 API and is tested with package-managed Zellij 0.45.1.
 
-Download [v0.4.1](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.4.1), verify its checksum, and install the WASM:
+Download [v0.5.0](https://github.com/pbjorklund/zellij-tabbar/releases/tag/v0.5.0), verify its checksum, and install the WASM:
 
 ```sh
 (
   set -eu
   download_dir=$(mktemp -d)
   cd "$download_dir"
-  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.4.1
+  release=https://github.com/pbjorklund/zellij-tabbar/releases/download/v0.5.0
   curl -fLO "$release/zellij-tabbar.wasm"
   curl -fLO "$release/SHA256SUMS"
   sha256sum --check SHA256SUMS
